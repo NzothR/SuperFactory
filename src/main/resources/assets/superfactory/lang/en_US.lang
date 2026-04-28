@@ -1,0 +1,58 @@
+superfactory.common.none=None
+superfactory.common.off=Off
+superfactory.common.disabled=Disabled
+superfactory.common.parameter=Parameter
+
+superfactory.machine.super_proxy_factory.name=Super Proxy Factory
+
+superfactory.machine.super_proxy_factory.param.batch=Batch Processing
+superfactory.machine.super_proxy_factory.param.lock=Recipe Lock
+superfactory.machine.super_proxy_factory.param.smart_cleanup=Smart Byproduct Cleanup
+superfactory.machine.super_proxy_factory.param.max_runtime=Maximum Runtime (ticks)
+superfactory.machine.super_proxy_factory.param.min_runtime=Minimum Runtime (ticks)
+superfactory.machine.super_proxy_factory.param.parallel=Parallel Adjustment
+superfactory.machine.super_proxy_factory.param.input_separation=Input Separation
+superfactory.machine.super_proxy_factory.param.item_multiplier=Item Output Multiplier
+superfactory.machine.super_proxy_factory.param.fluid_multiplier=Fluid Output Multiplier
+superfactory.machine.super_proxy_factory.param.item_min_output=Item Minimum Output
+superfactory.machine.super_proxy_factory.param.fluid_min_output=Fluid Minimum Output
+superfactory.machine.super_proxy_factory.param.item_max_output=Item Maximum Output
+superfactory.machine.super_proxy_factory.param.fluid_max_output=Fluid Maximum Output
+
+superfactory.machine.super_proxy_factory.gui.cached_host=Cached Host
+superfactory.machine.super_proxy_factory.gui.recipe_mode=Recipe Mode
+superfactory.machine.super_proxy_factory.gui.parallel=Parallel
+superfactory.machine.super_proxy_factory.gui.cache_state=Cache State
+superfactory.machine.super_proxy_factory.gui.smart_cleanup=Smart Cleanup
+superfactory.machine.super_proxy_factory.gui.placeholder=Reserved
+superfactory.machine.super_proxy_factory.gui.progress=Progress
+superfactory.machine.super_proxy_factory.gui.eu=Energy Use
+superfactory.machine.super_proxy_factory.gui.tooltip.update_cache=Update and cache recipe maps from the inserted multiblock controller
+superfactory.machine.super_proxy_factory.gui.tooltip.check_structure=Validate the multiblock structure immediately
+
+superfactory.machine.super_proxy_factory.help.multiplier=0 disables adjustment. Positive values multiply every final output stack of this type.
+superfactory.machine.super_proxy_factory.help.min_output=0 disables adjustment. Positive values enforce a minimum amount for every final output stack of this type.
+superfactory.machine.super_proxy_factory.help.max_output=0 disables adjustment. Positive values cap every final output stack of this type.
+superfactory.machine.super_proxy_factory.help.param_card=These values can be copied with a Parametrizer Memory Card.
+
+superfactory.machine.super_proxy_factory.chat.no_modes=No cached recipe modes
+superfactory.machine.super_proxy_factory.chat.mode_prefix=Super Proxy Mode: 
+
+superfactory.machine.super_proxy_factory.cache.cleared_empty=Cache cleared: controller slot is empty
+superfactory.machine.super_proxy_factory.cache.cleared_invalid_item=Cache cleared: only GregTech multiblock controllers are supported
+superfactory.machine.super_proxy_factory.cache.cleared_invalid_meta=Cache cleared: invalid controller meta
+superfactory.machine.super_proxy_factory.cache.cleared_not_multiblock=Cache cleared: inserted controller is not a multiblock machine
+superfactory.machine.super_proxy_factory.cache.cleared_no_recipe_map=Cache cleared: this multiblock has no recipe map interface
+superfactory.machine.super_proxy_factory.cache.cleared_no_usable_map=Cache cleared: no usable recipe maps were found
+superfactory.machine.super_proxy_factory.cache.cached_prefix=Cached
+superfactory.machine.super_proxy_factory.cache.cached_suffix=recipe mode(s) from
+
+superfactory.machine.super_proxy_factory.tooltip.type=Universal Proxy
+superfactory.machine.super_proxy_factory.tooltip.1=Caches multiblock recipe maps and proxies them through a TecTech-style controller.
+superfactory.machine.super_proxy_factory.tooltip.2=Only GregTech multiblock machine controllers are recognized by manual recipe update.
+superfactory.machine.super_proxy_factory.tooltip.3=Right-click with a screwdriver to cycle cached recipe modes on this controller only.
+superfactory.machine.super_proxy_factory.tooltip.4=Maintenance is internally disabled to avoid inherited maintenance penalties.
+superfactory.machine.super_proxy_factory.tooltip.controller=Front center
+superfactory.machine.super_proxy_factory.tooltip.any_casing=Any casing
+superfactory.machine.super_proxy_factory.param.power_display_mode=Power Display Mode
+superfactory.machine.super_proxy_factory.help.power_display_mode=Use 0 to show tier format such as 1A LV/t while keeping the EU/t value in parentheses. Values above 0 show plain EU/t.

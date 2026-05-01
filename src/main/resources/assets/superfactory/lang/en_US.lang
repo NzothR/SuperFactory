@@ -1,13 +1,12 @@
-superfactory.common.none=None
+﻿superfactory.common.none=None
 superfactory.common.off=Off
 superfactory.common.disabled=Disabled
 superfactory.common.parameter=Parameter
 
 superfactory.machine.super_proxy_factory.name=Super Proxy Factory
 
-superfactory.machine.super_proxy_factory.param.batch=Batch Processing
-superfactory.machine.super_proxy_factory.param.lock=Recipe Lock
-superfactory.machine.super_proxy_factory.param.smart_cleanup=Smart Byproduct Cleanup
+superfactory.machine.super_proxy_factory.param.batch=Batch Enabled
+superfactory.machine.super_proxy_factory.param.lock=Recipe Lock Toggle
 superfactory.machine.super_proxy_factory.param.max_runtime=Maximum Runtime (ticks)
 superfactory.machine.super_proxy_factory.param.min_runtime=Minimum Runtime (ticks)
 superfactory.machine.super_proxy_factory.param.parallel=Parallel Adjustment
@@ -23,11 +22,10 @@ superfactory.machine.super_proxy_factory.gui.cached_host=Cached Host
 superfactory.machine.super_proxy_factory.gui.recipe_mode=Recipe Mode
 superfactory.machine.super_proxy_factory.gui.parallel=Parallel
 superfactory.machine.super_proxy_factory.gui.cache_state=Cache State
-superfactory.machine.super_proxy_factory.gui.smart_cleanup=Smart Cleanup
 superfactory.machine.super_proxy_factory.gui.placeholder=Reserved
 superfactory.machine.super_proxy_factory.gui.progress=Progress
 superfactory.machine.super_proxy_factory.gui.eu=Energy Use
-superfactory.machine.super_proxy_factory.gui.tooltip.update_cache=Update and cache recipe maps from the inserted multiblock controller
+superfactory.machine.super_proxy_factory.gui.tooltip.update_cache=Update recipes (also reload config and check structure)
 superfactory.machine.super_proxy_factory.gui.tooltip.check_structure=Validate the multiblock structure immediately
 
 superfactory.machine.super_proxy_factory.help.multiplier=0 disables adjustment. Positive values multiply every final output stack of this type.
@@ -56,3 +54,17 @@ superfactory.machine.super_proxy_factory.tooltip.controller=Front center
 superfactory.machine.super_proxy_factory.tooltip.any_casing=Any casing
 superfactory.machine.super_proxy_factory.param.power_display_mode=Power Display Mode
 superfactory.machine.super_proxy_factory.help.power_display_mode=Use 0 to show tier format such as 1A LV/t while keeping the EU/t value in parentheses. Values above 0 show plain EU/t.
+superfactory.machine.super_proxy_factory.gui.available_modes=Available Modes
+superfactory.machine.super_proxy_factory.gui.structure_failed=Cannot work, multiblock structure check failed!
+superfactory.machine.super_proxy_factory.gui.recipe_lock=Recipe Lock
+superfactory.machine.super_proxy_factory.gui.recipe_lock_pending=Enabled, will lock the next valid recipe
+superfactory.machine.super_proxy_factory.gui.recipe_lock_locked=Locked
+superfactory.machine.super_proxy_factory.gui.recipe_inputs=Locked Inputs
+superfactory.machine.super_proxy_factory.gui.recipe_outputs=Locked Outputs
+superfactory.machine.super_proxy_factory.gui.output=Outputs
+superfactory.machine.super_proxy_factory.gui.not_working=Currently idle
+superfactory.machine.super_proxy_factory.gui.folded_prefix=Remaining
+superfactory.machine.super_proxy_factory.gui.folded_suffix=entries folded
+
+superfactory.machine.super_proxy_factory.param.wireless_mode=Wireless Mode
+superfactory.machine.super_proxy_factory.param.manual_overclocks=Manual Overclocks

@@ -9,6 +9,7 @@ public class Config {
     public static String greeting = "Hello World";
     public static int mteIdOffset = 18000;
     public static boolean enableSuperProxyFactory = true;
+    public static boolean enableSuperIntegratedFactory = true;
     public static boolean enableOutputMultiplierAdjustment = false;
     public static boolean enableRuntimeAdjustment = false;
     public static boolean enableOutputRangeAdjustment = false;
@@ -31,6 +32,11 @@ public class Config {
             Configuration.CATEGORY_GENERAL,
             enableSuperProxyFactory,
             "Whether the Super Proxy Factory controller should be registered.");
+        enableSuperIntegratedFactory = configuration.getBoolean(
+            "enableSuperIntegratedFactory",
+            Configuration.CATEGORY_GENERAL,
+            enableSuperIntegratedFactory,
+            "Whether the Super Integrated Factory controller should be registered.");
         enableOutputMultiplierAdjustment = configuration.getBoolean(
             "enableOutputMultiplierAdjustment",
             Configuration.CATEGORY_GENERAL,

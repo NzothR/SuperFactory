@@ -2,6 +2,8 @@ package com.nzoth.superfactory;
 
 import com.nzoth.superfactory.common.loader.MachineLoader;
 import com.nzoth.superfactory.common.loader.RecipeLoader;
+import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
+import com.nzoth.superfactory.common.network.NetworkLoader;
 
 import cpw.mods.fml.common.event.FMLInitializationEvent;
 import cpw.mods.fml.common.event.FMLPostInitializationEvent;
@@ -21,12 +23,15 @@ public class CommonProxy {
 
     // load "Do your mod setup. Build whatever data structures you care about. Register recipes." (Remove if not needed)
     public void init(FMLInitializationEvent event) {
+        NetworkLoader.init();
         MachineLoader.load();
         RecipeLoader.load();
     }
 
     // postInit "Handle interaction with other mods, complete your setup based on this." (Remove if not needed)
     public void postInit(FMLPostInitializationEvent event) {}
+
+    public void openIntegratedFactoryProcessGui(MTESuperIntegratedFactory factory) {}
 
     // register server commands in this event handler (Remove if not needed)
     public void serverStarting(FMLServerStartingEvent event) {}

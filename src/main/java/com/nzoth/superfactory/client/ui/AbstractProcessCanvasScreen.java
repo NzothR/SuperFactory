@@ -78,6 +78,7 @@ public abstract class AbstractProcessCanvasScreen extends GuiContainer {
         for (CanvasButton button : canvasButtons) {
             button.draw(mouseX, mouseY);
         }
+        disableCanvasScissor();
         boolean overlayConsumesTooltips = drawCanvasOverlay(mouseX, mouseY, partialTicks);
         if (!dialogOpen && !overlayConsumesTooltips) {
             for (CanvasButton button : canvasButtons) {
@@ -87,7 +88,6 @@ public abstract class AbstractProcessCanvasScreen extends GuiContainer {
         if (dialogOpen) {
             drawDialog(mouseX, mouseY);
         }
-        disableCanvasScissor();
         drawPendingTooltip();
     }
 
@@ -144,7 +144,7 @@ public abstract class AbstractProcessCanvasScreen extends GuiContainer {
             handleDialogClick(mouseX, mouseY, mouseButton);
             return;
         }
-        if (isInsideCanvas(mouseX, mouseY) && shouldHandleCanvasClickBeforeButtons(mouseX, mouseY, mouseButton)) {
+        if (shouldHandleCanvasClickBeforeButtons(mouseX, mouseY, mouseButton)) {
             onCanvasMouseClicked(mouseX, mouseY, mouseButton);
             return;
         }

@@ -38,6 +38,10 @@ public final class SuperIntegratedFactoryNEIHandler implements INEIGuiHandler, I
         if (factory == null) {
             return false;
         }
+        if (!(factory.getActiveProcessGui() instanceof GuiSuperIntegratedFactoryProcess processGui)
+            || !processGui.canAcceptExternalRecipeFill()) {
+            return false;
+        }
         return factory.getSelectedProcessNodeId() > 0 && gui.getHandler() instanceof GTNEIDefaultHandler;
     }
 
@@ -69,10 +73,12 @@ public final class SuperIntegratedFactoryNEIHandler implements INEIGuiHandler, I
 
     @Override
     public boolean hideItemPanelSlot(GuiContainer gui, int x, int y, int w, int h) {
-        if (!(gui instanceof GuiSuperIntegratedFactoryProcess processGui)) {
-            return false;
-        }
-        return processGui.intersectsCanvas(x, y, w, h);
+        /*
+         * NEI uses this hook for both rendering and hit-testing item panel slots. Returning true for our canvas area
+         * makes the visible item panel unable to enter its normal long-press drag state when layouts overlap the
+         * process editor. Keep NEI slots fully interactive and let our editor handle the final drop instead.
+         */
+        return false;
     }
 
     @Override

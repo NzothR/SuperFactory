@@ -25,5 +25,10 @@ public final class NetworkLoader {
             MessageUpdateProcessGraph.class,
             nextId++,
             Side.SERVER);
+        INSTANCE.registerMessage(
+            MessageSubmitProcessRequirements.Handler.class,
+            MessageSubmitProcessRequirements.class,
+            nextId++,
+            Side.SERVER);
     }
 }

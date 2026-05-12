@@ -264,9 +264,28 @@ public class CanvasWidget extends Widget implements Interactable, ISyncedWidget 
             int y1 = worldToScreenY(from.y + ProcessNode.HEIGHT / 2);
             int x2 = worldToScreenX(to.x);
             int y2 = worldToScreenY(to.y + ProcessNode.HEIGHT / 2);
+            if (from.id == to.id) {
+                drawSelfLoop(from, 0xFF71C7EC);
+                continue;
+            }
             drawLine(x1, y1, x2, y2, 0xFF71C7EC);
             drawArrowHead(x1, y1, x2, y2);
         }
+    }
+
+    private void drawSelfLoop(ProcessNode node, int color) {
+        int left = worldToScreenX(node.x);
+        int right = worldToScreenX(node.x + ProcessNode.WIDTH);
+        int centerY = worldToScreenY(node.y + ProcessNode.HEIGHT / 2);
+        int elbowY = Math.min(worldToScreenY(node.y) - scale(18), centerY - scale(18));
+        int leftOut = left - scale(18);
+        int rightOut = right + scale(18);
+        drawLine(right, centerY, rightOut, centerY, color);
+        drawLine(rightOut, centerY, rightOut, elbowY, color);
+        drawLine(rightOut, elbowY, leftOut, elbowY, color);
+        drawLine(leftOut, elbowY, leftOut, centerY, color);
+        drawLine(leftOut, centerY, left, centerY, color);
+        drawArrowHead(leftOut, centerY, left, centerY);
     }
 
     private void drawNodes() {

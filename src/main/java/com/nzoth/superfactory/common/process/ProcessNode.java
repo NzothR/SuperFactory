@@ -19,8 +19,8 @@ public final class ProcessNode {
 
     public static final int WIDTH = 92;
     public static final int HEIGHT = 42;
-    public static final int INPUT_SLOTS = 36;
-    public static final int OUTPUT_SLOTS = 36;
+    public static final int INPUT_SLOTS = 180;
+    public static final int OUTPUT_SLOTS = 180;
     public static final int NON_CONSUMABLE_SLOTS = 9;
 
     public final int id;
@@ -31,6 +31,8 @@ public final class ProcessNode {
     public String name;
     public int durationTicks;
     public long euPerTick;
+    public int baseDurationTicks;
+    public long baseEuPerTick;
     public int overclockCount;
     public int parallelLimit = 1;
     public int inputPage;
@@ -38,7 +40,9 @@ public final class ProcessNode {
     public String recipeHandlerName = "";
     public String recipeMapName = "";
     public String recipeFingerprint = "";
+    public String estimatedOutputLine = "";
     public boolean lastRecipeCheckPassed;
+    public final int[] outputChances = new int[OUTPUT_SLOTS];
     public final InputVariantState[] inputVariants = new InputVariantState[INPUT_SLOTS];
     public final ItemStackHandler machineHandler = new TrackingItemStackHandler(1, this::markRecipeDirty);
     public final ItemStackHandler inputHandler = new TrackingItemStackHandler(INPUT_SLOTS, this::markRecipeDirty);
@@ -52,6 +56,7 @@ public final class ProcessNode {
         this.x = x;
         this.y = y;
         this.name = "Node " + id;
+        java.util.Arrays.fill(outputChances, 10000);
         for (int i = 0; i < inputVariants.length; i++) {
             inputVariants[i] = new InputVariantState();
         }
@@ -67,6 +72,8 @@ public final class ProcessNode {
         tag.setString("Name", name == null ? "" : name);
         tag.setInteger("DurationTicks", durationTicks);
         tag.setLong("EUt", euPerTick);
+        tag.setInteger("BaseDurationTicks", baseDurationTicks);
+        tag.setLong("BaseEUt", baseEuPerTick);
         tag.setInteger("Overclocks", overclockCount);
         tag.setInteger("ParallelLimit", parallelLimit);
         tag.setInteger("InputPage", inputPage);
@@ -74,7 +81,9 @@ public final class ProcessNode {
         tag.setString("RecipeHandlerName", recipeHandlerName == null ? "" : recipeHandlerName);
         tag.setString("RecipeMapName", recipeMapName == null ? "" : recipeMapName);
         tag.setString("RecipeFingerprint", recipeFingerprint == null ? "" : recipeFingerprint);
+        tag.setString("EstimatedOutputLine", estimatedOutputLine == null ? "" : estimatedOutputLine);
         tag.setBoolean("LastRecipeCheckPassed", lastRecipeCheckPassed);
+        tag.setIntArray("OutputChances", outputChances);
         NBTTagList inputVariantList = new NBTTagList();
         for (int i = 0; i < inputVariants.length; i++) {
             inputVariantList.appendTag(inputVariants[i].writeToNBT(i));
@@ -94,6 +103,9 @@ public final class ProcessNode {
         node.name = tag.getString("Name");
         node.durationTicks = Math.max(0, tag.getInteger("DurationTicks"));
         node.euPerTick = Math.max(0L, tag.getLong("EUt"));
+        node.baseDurationTicks = Math
+            .max(0, tag.hasKey("BaseDurationTicks") ? tag.getInteger("BaseDurationTicks") : node.durationTicks);
+        node.baseEuPerTick = Math.max(0L, tag.hasKey("BaseEUt") ? tag.getLong("BaseEUt") : node.euPerTick);
         node.overclockCount = Math.max(0, tag.getInteger("Overclocks"));
         node.parallelLimit = Math.max(1, tag.hasKey("ParallelLimit") ? tag.getInteger("ParallelLimit") : 1);
         node.inputPage = Math.max(0, tag.getInteger("InputPage"));
@@ -101,7 +113,14 @@ public final class ProcessNode {
         node.recipeHandlerName = tag.getString("RecipeHandlerName");
         node.recipeMapName = tag.getString("RecipeMapName");
         node.recipeFingerprint = tag.getString("RecipeFingerprint");
+        node.estimatedOutputLine = tag.getString("EstimatedOutputLine");
         node.lastRecipeCheckPassed = tag.getBoolean("LastRecipeCheckPassed");
+        if (tag.hasKey("OutputChances", Constants.NBT.TAG_INT_ARRAY)) {
+            int[] chances = tag.getIntArray("OutputChances");
+            for (int i = 0; i < node.outputChances.length && i < chances.length; i++) {
+                node.outputChances[i] = clampChance(chances[i]);
+            }
+        }
         if (tag.hasKey("Machine")) {
             node.machineHandler.deserializeNBT(tag.getCompoundTag("Machine"));
         }
@@ -123,6 +142,28 @@ public final class ProcessNode {
             node.nonConsumableHandler.deserializeNBT(tag.getCompoundTag("NonConsumables"));
         }
         return node;
+    }
+
+    public int getOutputChance(int slot) {
+        if (slot < 0 || slot >= outputChances.length) {
+            return 10000;
+        }
+        return clampChance(outputChances[slot]);
+    }
+
+    public void setOutputChance(int slot, int chance) {
+        if (slot < 0 || slot >= outputChances.length) {
+            return;
+        }
+        outputChances[slot] = clampChance(chance);
+    }
+
+    public void resetOutputChances() {
+        java.util.Arrays.fill(outputChances, 10000);
+    }
+
+    private static int clampChance(int chance) {
+        return chance <= 0 ? 10000 : Math.max(0, Math.min(10000, chance));
     }
 
     public void clearInputVariants(int slot) {
@@ -179,6 +220,8 @@ public final class ProcessNode {
             + handlerFingerprint(inputHandler, inputVariants)
             + ";o="
             + handlerFingerprint(outputHandler, null)
+            + ";oc="
+            + java.util.Arrays.toString(outputChances)
             + ";nc="
             + handlerFingerprint(nonConsumableHandler, null);
     }
@@ -186,6 +229,7 @@ public final class ProcessNode {
     private void markRecipeDirty() {
         if (!locked) {
             lastRecipeCheckPassed = false;
+            estimatedOutputLine = "";
         }
     }
 

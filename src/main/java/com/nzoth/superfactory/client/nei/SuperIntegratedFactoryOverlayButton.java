@@ -24,6 +24,7 @@ import codechicken.nei.recipe.RecipeCatalysts;
 import codechicken.nei.recipe.RecipeHandlerRef;
 import gregtech.api.enums.ItemList;
 import gregtech.api.util.GTOreDictUnificator;
+import gregtech.api.util.GTRecipe;
 import gregtech.api.util.GTUtility;
 import gregtech.nei.GTNEIDefaultHandler;
 
@@ -59,12 +60,19 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
     public void mouseReleased(int mouseX, int mouseY) {
         MTESuperIntegratedFactory factory = MTESuperIntegratedFactory.getClientEditingFactory();
         if (factory != null && handlerRef.handler instanceof GTNEIDefaultHandler handler) {
+            if (handler.getRecipeMap() != null && isUnsupportedRecipeMapName(handler.getRecipeMap().unlocalizedName)) {
+                Minecraft.getMinecraft()
+                    .displayGuiScreen(firstGui);
+                return;
+            }
+            if (!(factory.getActiveProcessGui() instanceof GuiSuperIntegratedFactoryProcess processGui)
+                || !processGui.canAcceptExternalRecipeFill()) {
+                return;
+            }
             int nodeId = factory.getSelectedProcessNodeId();
             NBTTagCompound recipeTag = buildRecipeTag(handler, handlerRef.recipeIndex);
             factory.applyRecipeToNode(nodeId, recipeTag);
-            if (firstGui instanceof GuiSuperIntegratedFactoryProcess processGui) {
-                processGui.closeCandidateSelectorAfterExternalApply(nodeId);
-            }
+            processGui.closeCandidateSelectorAfterExternalApply(nodeId);
             NetworkLoader.INSTANCE
                 .sendToServer(new MessageSetProcessNodeRecipe(factory.getBaseMetaTileEntity(), nodeId, recipeTag));
             Minecraft.getMinecraft()
@@ -72,6 +80,10 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             return;
         }
         super.mouseReleased(mouseX, mouseY);
+    }
+
+    private static boolean isUnsupportedRecipeMapName(String recipeMapName) {
+        return "gt.recipe.eyeofharmony".equals(recipeMapName);
     }
 
     public static void updateRecipeButtons(GuiRecipe<?> guiRecipe, List<GuiRecipeButton> buttonList) {
@@ -95,11 +107,13 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         fillHandlerWithFluids(outputHandler, cached.mRecipe.mFluidOutputs);
         fillNonConsumables(nonConsumableHandler, cached);
         NBTTagList inputVariants = buildInputVariantsTag(cached.mInputs, cached.mRecipe.mInputs);
+        int[] outputChances = buildOutputChances(outputHandler, cached.mRecipe);
 
         NBTTagCompound tag = new NBTTagCompound();
         tag.setTag("Inputs", inputHandler.serializeNBT());
         tag.setTag("InputVariants", inputVariants);
         tag.setTag("Outputs", outputHandler.serializeNBT());
+        tag.setIntArray("OutputChances", outputChances);
         tag.setTag("NonConsumables", nonConsumableHandler.serializeNBT());
         tag.setInteger("DurationTicks", cached.mRecipe.mDuration);
         tag.setLong("EUt", cached.mRecipe.mEUt);
@@ -111,6 +125,7 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
                 inputHandler,
                 outputHandler,
                 nonConsumableHandler,
+                outputChances,
                 inputVariants,
                 cached.mRecipe.mDuration,
                 cached.mRecipe.mEUt));
@@ -319,14 +334,64 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         return 0;
     }
 
+    private static int[] buildOutputChances(ItemStackHandler outputs, GTRecipe recipe) {
+        int[] chances = new int[ProcessNode.OUTPUT_SLOTS];
+        java.util.Arrays.fill(chances, 10000);
+        if (recipe == null || recipe.mChances == null) {
+            return chances;
+        }
+        boolean[] usedSlots = new boolean[outputs.getSlots()];
+        for (int recipeOutput = 0; recipeOutput < recipe.mOutputs.length
+            && recipeOutput < recipe.mChances.length; recipeOutput++) {
+            ItemStack stack = recipe.mOutputs[recipeOutput];
+            if (stack == null) {
+                continue;
+            }
+            int slot = findMatchingOutputSlot(outputs, stack, usedSlots);
+            if (slot >= 0) {
+                chances[slot] = normalizeRecipeChance(recipe.mChances[recipeOutput]);
+                usedSlots[slot] = true;
+            }
+        }
+        return chances;
+    }
+
+    private static int normalizeRecipeChance(int chance) {
+        return chance <= 0 ? 10000 : Math.max(0, Math.min(10000, chance));
+    }
+
+    private static int findMatchingOutputSlot(ItemStackHandler outputs, ItemStack stack) {
+        return findMatchingOutputSlot(outputs, stack, null);
+    }
+
+    private static int findMatchingOutputSlot(ItemStackHandler outputs, ItemStack stack, boolean[] usedSlots) {
+        for (int slot = 0; slot < outputs.getSlots(); slot++) {
+            if (usedSlots != null && slot < usedSlots.length && usedSlots[slot]) {
+                continue;
+            }
+            ItemStack existing = outputs.getStackInSlot(slot);
+            if (existing != null && GTUtility.areStacksEqual(existing, stack, true)) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
     private static String buildRecipeFingerprint(ItemStackHandler inputs, ItemStackHandler outputs,
-        ItemStackHandler nonConsumables, NBTTagList inputVariants, int duration, long euPerTick) {
+        ItemStackHandler nonConsumables, int[] outputChances, NBTTagList inputVariants, int duration, long euPerTick) {
         ProcessNode node = new ProcessNode(0, 0, 0);
         node.inputHandler.deserializeNBT(inputs.serializeNBT());
         node.outputHandler.deserializeNBT(outputs.serializeNBT());
         node.nonConsumableHandler.deserializeNBT(nonConsumables.serializeNBT());
         node.durationTicks = duration;
         node.euPerTick = euPerTick;
+        node.baseDurationTicks = duration;
+        node.baseEuPerTick = euPerTick;
+        if (outputChances != null) {
+            for (int i = 0; i < outputChances.length && i < ProcessNode.OUTPUT_SLOTS; i++) {
+                node.setOutputChance(i, outputChances[i]);
+            }
+        }
         for (int i = 0; i < inputVariants.tagCount(); i++) {
             NBTTagCompound variantTag = inputVariants.getCompoundTagAt(i);
             int slot = Math.max(0, Math.min(ProcessNode.INPUT_SLOTS - 1, variantTag.getInteger("Slot")));

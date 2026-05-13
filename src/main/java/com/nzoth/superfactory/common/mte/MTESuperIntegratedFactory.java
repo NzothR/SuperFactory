@@ -15,12 +15,14 @@ import static gregtech.api.util.GTStructureUtility.buildHatchAdder;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,6 +34,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
@@ -60,6 +63,8 @@ import com.gtnewhorizons.modularui.common.widget.TextWidget;
 import com.gtnewhorizons.modularui.common.widget.textfield.TextFieldWidget;
 import com.nzoth.superfactory.Config;
 import com.nzoth.superfactory.SuperFactory;
+import com.nzoth.superfactory.common.network.MessageProcessCanvasStatus;
+import com.nzoth.superfactory.common.network.NetworkLoader;
 import com.nzoth.superfactory.common.process.ProcessEdge;
 import com.nzoth.superfactory.common.process.ProcessGraph;
 import com.nzoth.superfactory.common.process.ProcessNode;
@@ -145,23 +150,13 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         .build();
 
     /*
-     * Parameter layout intentionally mirrors Super Proxy Factory. Shared indices keep Parametrizer cards stable, while
-     * the integrated factory runtime only consumes the options that are meaningful for graph execution.
+     * Runtime parameters are intentionally narrow for the integrated factory. The graph already owns recipe identity
+     * and
+     * per-node tuning, so the machine only exposes global execution modifiers.
      */
-    private static final int INDEX_BATCH = 0;
-    private static final int INDEX_LOCK = 10;
-    private static final int INDEX_INPUT_SEPARATION = 1;
-    private static final int INDEX_PARALLEL = 11;
-    private static final int INDEX_WIRELESS = 2;
-    private static final int INDEX_ITEM_MULTIPLIER = 12;
-    private static final int INDEX_FLUID_MULTIPLIER = 3;
-    private static final int INDEX_ITEM_MIN = 13;
-    private static final int INDEX_FLUID_MIN = 4;
-    private static final int INDEX_ITEM_MAX = 14;
-    private static final int INDEX_FLUID_MAX = 5;
-    private static final int INDEX_MIN_TIME = 15;
-    private static final int INDEX_MAX_TIME = 6;
-    private static final int INDEX_MANUAL_OVERCLOCKS = 16;
+    private static final int INDEX_WIRELESS = 0;
+    private static final int INDEX_PARALLEL = 10;
+    private static final int INDEX_MANUAL_OVERCLOCKS = 1;
 
     private int casingCount;
     /** Completed virtual jobs in the currently installed runtime graph. */
@@ -251,83 +246,18 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         var group0 = parametrization.getGroup(0, true);
         group0.makeInParameter(
             0,
-            1,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.batch"),
+            0,
+            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.wireless_mode"),
             (base, parameter) -> switchStatus(parameter.get()));
         group0.makeInParameter(
-            1,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.lock"),
-            (base, parameter) -> switchStatus(parameter.get()));
-
-        var group1 = parametrization.getGroup(1, true);
-        group1.makeInParameter(
-            0,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.input_separation"),
-            (base, parameter) -> switchStatus(parameter.get()));
-        group1.makeInParameter(
             1,
             1,
             (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.parallel"),
             (base, parameter) -> parallelStatus(parameter.get()));
 
-        var group2 = parametrization.getGroup(2, true);
-        group2.makeInParameter(
+        var group1 = parametrization.getGroup(1, true);
+        group1.makeInParameter(
             0,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.wireless_mode"),
-            (base, parameter) -> switchStatus(parameter.get()));
-        group2.makeInParameter(
-            1,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.item_multiplier"),
-            (base, parameter) -> optionalValueStatus(parameter.get()));
-
-        var group3 = parametrization.getGroup(3, true);
-        group3.makeInParameter(
-            0,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.fluid_multiplier"),
-            (base, parameter) -> optionalValueStatus(parameter.get()));
-        group3.makeInParameter(
-            1,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.item_min_output"),
-            (base, parameter) -> optionalValueStatus(parameter.get()));
-
-        var group4 = parametrization.getGroup(4, true);
-        group4.makeInParameter(
-            0,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.fluid_min_output"),
-            (base, parameter) -> optionalValueStatus(parameter.get()));
-        group4.makeInParameter(
-            1,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.item_max_output"),
-            (base, parameter) -> optionalValueStatus(parameter.get()));
-
-        var group5 = parametrization.getGroup(5, true);
-        group5.makeInParameter(
-            0,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.fluid_max_output"),
-            (base, parameter) -> optionalValueStatus(parameter.get()));
-        group5.makeInParameter(
-            1,
-            1,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.min_runtime"),
-            (base, parameter) -> requiredPositiveStatus(parameter.get()));
-
-        var group6 = parametrization.getGroup(6, true);
-        group6.makeInParameter(
-            0,
-            0,
-            (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.max_runtime"),
-            (base, parameter) -> optionalValueStatus(parameter.get()));
-        group6.makeInParameter(
-            1,
             0,
             (base, parameter) -> tr("superfactory.machine.super_integrated_factory.param.manual_overclocks"),
             (base, parameter) -> optionalValueStatus(parameter.get()));
@@ -339,35 +269,8 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         Arrays.fill(inputStatuses(), LedStatus.STATUS_UNUSED);
         Arrays.fill(outputStatuses(), LedStatus.STATUS_UNUSED);
 
-        inputStatuses()[INDEX_BATCH] = switchStatus(inputValues()[INDEX_BATCH]);
-        inputStatuses()[INDEX_LOCK] = switchStatus(inputValues()[INDEX_LOCK]);
-        inputStatuses()[INDEX_INPUT_SEPARATION] = switchStatus(inputValues()[INDEX_INPUT_SEPARATION]);
-        inputStatuses()[INDEX_PARALLEL] = parallelStatus(inputValues()[INDEX_PARALLEL]);
         inputStatuses()[INDEX_WIRELESS] = switchStatus(inputValues()[INDEX_WIRELESS]);
-        inputStatuses()[INDEX_ITEM_MULTIPLIER] = isMultiplierAdjustmentEnabled()
-            ? optionalValueStatus(inputValues()[INDEX_ITEM_MULTIPLIER])
-            : LedStatus.STATUS_UNUSED;
-        inputStatuses()[INDEX_FLUID_MULTIPLIER] = isMultiplierAdjustmentEnabled()
-            ? optionalValueStatus(inputValues()[INDEX_FLUID_MULTIPLIER])
-            : LedStatus.STATUS_UNUSED;
-        inputStatuses()[INDEX_ITEM_MIN] = isOutputRangeAdjustmentEnabled()
-            ? optionalValueStatus(inputValues()[INDEX_ITEM_MIN])
-            : LedStatus.STATUS_UNUSED;
-        inputStatuses()[INDEX_FLUID_MIN] = isOutputRangeAdjustmentEnabled()
-            ? optionalValueStatus(inputValues()[INDEX_FLUID_MIN])
-            : LedStatus.STATUS_UNUSED;
-        inputStatuses()[INDEX_ITEM_MAX] = isOutputRangeAdjustmentEnabled()
-            ? optionalValueStatus(inputValues()[INDEX_ITEM_MAX])
-            : LedStatus.STATUS_UNUSED;
-        inputStatuses()[INDEX_FLUID_MAX] = isOutputRangeAdjustmentEnabled()
-            ? optionalValueStatus(inputValues()[INDEX_FLUID_MAX])
-            : LedStatus.STATUS_UNUSED;
-        inputStatuses()[INDEX_MAX_TIME] = isRuntimeAdjustmentEnabled()
-            ? optionalValueStatus(inputValues()[INDEX_MAX_TIME])
-            : LedStatus.STATUS_UNUSED;
-        inputStatuses()[INDEX_MIN_TIME] = isRuntimeAdjustmentEnabled()
-            ? requiredPositiveStatus(inputValues()[INDEX_MIN_TIME])
-            : LedStatus.STATUS_UNUSED;
+        inputStatuses()[INDEX_PARALLEL] = parallelStatus(inputValues()[INDEX_PARALLEL]);
         inputStatuses()[INDEX_MANUAL_OVERCLOCKS] = optionalValueStatus(inputValues()[INDEX_MANUAL_OVERCLOCKS]);
     }
 
@@ -1369,6 +1272,253 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         getBaseMetaTileEntity().markDirty();
     }
 
+    public void exportProcessRawMaterials(EntityPlayer player) {
+        RawMaterialExportPlan plan = buildRawMaterialExportPlan();
+        for (String nodeName : plan.oreDictionaryNodes) {
+            GTUtility.sendChatToPlayer(
+                player,
+                EnumChatFormatting.YELLOW + nodeName
+                    + ":"
+                    + tr("superfactory.machine.super_integrated_factory.chat.raw_material_ore_manual"));
+        }
+        if (plan.items.isEmpty() && plan.fluids.isEmpty()) {
+            if (!plan.oreDictionaryNodes.isEmpty()) {
+                sendProcessCanvasStatus(
+                    player,
+                    tr("superfactory.machine.super_integrated_factory.chat.raw_material_ore_notice"),
+                    0xFFFFFF77);
+                return;
+            }
+            sendProcessCanvasStatus(
+                player,
+                tr("superfactory.machine.super_integrated_factory.chat.raw_material_none"),
+                0xFFFF7777);
+            return;
+        }
+        List<RawMaterialMarkerTarget> targets = collectRawMaterialMarkerTargets();
+        if (targets.isEmpty()) {
+            sendProcessCanvasStatus(
+                player,
+                tr("superfactory.machine.super_integrated_factory.chat.raw_material_no_me_hatch"),
+                0xFFFF7777);
+            return;
+        }
+        int itemCapacity = 0;
+        int fluidCapacity = 0;
+        for (RawMaterialMarkerTarget target : targets) {
+            itemCapacity += target.itemCapacity();
+            fluidCapacity += target.fluidCapacity();
+        }
+        if (itemCapacity < plan.items.size() || fluidCapacity < plan.fluids.size()) {
+            sendProcessCanvasStatus(
+                player,
+                tr("superfactory.machine.super_integrated_factory.chat.raw_material_capacity_insufficient") + " "
+                    + plan.items.size()
+                    + "/"
+                    + itemCapacity
+                    + " "
+                    + plan.fluids.size()
+                    + "/"
+                    + fluidCapacity,
+                0xFFFF7777);
+            return;
+        }
+        for (RawMaterialMarkerTarget target : targets) {
+            target.clear();
+        }
+        int itemIndex = 0;
+        int fluidIndex = 0;
+        for (RawMaterialMarkerTarget target : targets) {
+            while (itemIndex < plan.items.size() && target.addItem(plan.items.get(itemIndex))) {
+                itemIndex++;
+            }
+            while (fluidIndex < plan.fluids.size() && target.addFluid(plan.fluids.get(fluidIndex))) {
+                fluidIndex++;
+            }
+        }
+        String successMessage = tr("superfactory.machine.super_integrated_factory.chat.raw_material_exported") + ": "
+            + plan.items.size()
+            + " "
+            + tr("superfactory.machine.super_integrated_factory.chat.raw_material_items")
+            + ", "
+            + plan.fluids.size()
+            + " "
+            + tr("superfactory.machine.super_integrated_factory.chat.raw_material_fluids");
+        if (!plan.oreDictionaryNodes.isEmpty()) {
+            successMessage += ", " + tr("superfactory.machine.super_integrated_factory.chat.raw_material_ore_notice");
+        }
+        sendProcessCanvasStatus(player, successMessage, 0xFF75D17C);
+        getBaseMetaTileEntity().markDirty();
+    }
+
+    private void sendProcessCanvasStatus(EntityPlayer player, String message, int color) {
+        if (player instanceof EntityPlayerMP playerMP) {
+            NetworkLoader.INSTANCE.sendTo(new MessageProcessCanvasStatus(message, color), playerMP);
+        } else if (player != null) {
+            GTUtility.sendChatToPlayer(player, message);
+        }
+    }
+
+    private RawMaterialExportPlan buildRawMaterialExportPlan() {
+        RawMaterialExportPlan plan = new RawMaterialExportPlan();
+        List<ProcessNode> relevantNodes = findRawMaterialRelevantNodes();
+        Set<Integer> relevantIds = new HashSet<>();
+        for (ProcessNode node : relevantNodes) {
+            relevantIds.add(node.id);
+        }
+        for (ProcessNode node : relevantNodes) {
+            for (int slot = 0; slot < node.inputHandler.getSlots(); slot++) {
+                ItemStack input = node.inputHandler.getStackInSlot(slot);
+                if (input == null) {
+                    continue;
+                }
+                FluidStack fluid = GTUtility.getFluidFromDisplayStack(input);
+                boolean suppliedInternally = fluid == null ? hasDirectItemProducer(node.id, input, relevantIds)
+                    : hasDirectFluidProducer(node.id, fluid, relevantIds);
+                if (suppliedInternally) {
+                    continue;
+                }
+                if (fluid != null && fluid.getFluid() != null) {
+                    addRawMaterialFluid(plan, fluid);
+                } else if (node.hasInputVariants(slot)) {
+                    addRawMaterialOreWarning(plan, safeNodeName(node));
+                } else {
+                    addRawMaterialItem(plan, input);
+                }
+            }
+        }
+        return plan;
+    }
+
+    private List<ProcessNode> findRawMaterialRelevantNodes() {
+        List<ProcessNode> relevant = new ArrayList<>();
+        for (ProcessNode node : processGraph.nodes) {
+            if (node.endNode) {
+                collectRawMaterialConnectedNodes(node.id, relevant);
+            }
+        }
+        if (!relevant.isEmpty()) {
+            return relevant;
+        }
+        for (ProcessNode node : processGraph.nodes) {
+            if (node.locked && node.lastRecipeCheckPassed) {
+                relevant.add(node);
+            }
+        }
+        return relevant;
+    }
+
+    private void collectRawMaterialConnectedNodes(int nodeId, List<ProcessNode> relevant) {
+        ProcessNode node = processGraph.findNode(nodeId);
+        if (node == null || relevant.contains(node)) {
+            return;
+        }
+        relevant.add(node);
+        for (ProcessEdge edge : processGraph.edges) {
+            if (edge.fromNodeId == nodeId) {
+                collectRawMaterialConnectedNodes(edge.toNodeId, relevant);
+            }
+            if (edge.toNodeId == nodeId) {
+                collectRawMaterialConnectedNodes(edge.fromNodeId, relevant);
+            }
+        }
+    }
+
+    private boolean hasDirectItemProducer(int consumerNodeId, ItemStack input, Set<Integer> relevantIds) {
+        for (ProcessEdge edge : processGraph.edges) {
+            if (edge.toNodeId != consumerNodeId || !relevantIds.contains(edge.fromNodeId)) {
+                continue;
+            }
+            ProcessNode producer = processGraph.findNode(edge.fromNodeId);
+            if (producer == null) {
+                continue;
+            }
+            for (int outputSlot = 0; outputSlot < producer.outputHandler.getSlots(); outputSlot++) {
+                ItemStack output = producer.outputHandler.getStackInSlot(outputSlot);
+                if (output != null && !isFluidDisplay(output) && itemMatches(input, output)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasDirectFluidProducer(int consumerNodeId, FluidStack input, Set<Integer> relevantIds) {
+        for (ProcessEdge edge : processGraph.edges) {
+            if (edge.toNodeId != consumerNodeId || !relevantIds.contains(edge.fromNodeId)) {
+                continue;
+            }
+            ProcessNode producer = processGraph.findNode(edge.fromNodeId);
+            if (producer == null) {
+                continue;
+            }
+            for (int outputSlot = 0; outputSlot < producer.outputHandler.getSlots(); outputSlot++) {
+                FluidStack output = GTUtility
+                    .getFluidFromDisplayStack(producer.outputHandler.getStackInSlot(outputSlot));
+                if (output != null && output.isFluidEqual(input)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void addRawMaterialItem(RawMaterialExportPlan plan, ItemStack stack) {
+        for (ItemStack existing : plan.items) {
+            if (GTUtility.areStacksEqual(existing, stack, true)) {
+                return;
+            }
+        }
+        plan.items.add(copyItemAmount(stack, 1));
+    }
+
+    private void addRawMaterialFluid(RawMaterialExportPlan plan, FluidStack stack) {
+        for (FluidStack existing : plan.fluids) {
+            if (existing != null && existing.isFluidEqual(stack)) {
+                return;
+            }
+        }
+        plan.fluids.add(copyFluidAmount(stack, 1));
+    }
+
+    private void addRawMaterialOreWarning(RawMaterialExportPlan plan, String nodeName) {
+        if (!plan.oreDictionaryNodes.contains(nodeName)) {
+            plan.oreDictionaryNodes.add(nodeName);
+        }
+    }
+
+    private List<RawMaterialMarkerTarget> collectRawMaterialMarkerTargets() {
+        List<RawMaterialMarkerTarget> combinedTargets = new ArrayList<>();
+        List<RawMaterialMarkerTarget> separateTargets = new ArrayList<>();
+        Set<Object> seen = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        for (IDualInputHatch hatch : mDualInputHatches) {
+            if (hatch != null && seen.add(hatch)) {
+                RawMaterialMarkerTarget target = RawMaterialMarkerTarget.tryCreate(hatch);
+                if (target != null) {
+                    (target.isCombined() ? combinedTargets : separateTargets).add(target);
+                }
+            }
+        }
+        for (MTEHatchInputBus bus : mInputBusses) {
+            if (bus != null && seen.add(bus)) {
+                RawMaterialMarkerTarget target = RawMaterialMarkerTarget.tryCreate(bus);
+                if (target != null) {
+                    (target.isCombined() ? combinedTargets : separateTargets).add(target);
+                }
+            }
+        }
+        for (MTEHatchInput hatch : mInputHatches) {
+            if (hatch != null && seen.add(hatch)) {
+                RawMaterialMarkerTarget target = RawMaterialMarkerTarget.tryCreate(hatch);
+                if (target != null) {
+                    (target.isCombined() ? combinedTargets : separateTargets).add(target);
+                }
+            }
+        }
+        combinedTargets.addAll(separateTargets);
+        return combinedTargets;
+    }
+
     public static MTESuperIntegratedFactory getClientEditingFactory() {
         return clientEditingFactory;
     }
@@ -1708,18 +1858,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         }
     }
 
-    private boolean isMultiplierAdjustmentEnabled() {
-        return Config.enableOutputMultiplierAdjustment;
-    }
-
-    private boolean isRuntimeAdjustmentEnabled() {
-        return Config.enableRuntimeAdjustment;
-    }
-
-    private boolean isOutputRangeAdjustmentEnabled() {
-        return Config.enableOutputRangeAdjustment;
-    }
-
     private boolean isWirelessModeEnabled() {
         return inputValues()[INDEX_WIRELESS] > 0D;
     }
@@ -1926,7 +2064,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         for (RunningJob job : runningJobs) {
             ProcessNode node = runtimeGraph.findNode(job.nodeId);
             if (node != null) {
-                totalEu = safeAddLong(totalEu, safeMultiply(Math.max(0L, node.euPerTick), Math.max(1, job.parallel)));
+                totalEu = safeAddLong(totalEu, safeMultiply(getJobEuPerTick(job, node), Math.max(1, job.parallel)));
             }
         }
         return totalEu;
@@ -2198,14 +2336,17 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
 
     private void scheduleRunnableNodes(boolean debugRuntime) {
         for (ProcessNode node : buildSchedulingOrder()) {
-            if (!node.locked || node.parallelLimit <= 0 || node.durationTicks <= 0) {
+            int effectiveParallelLimit = getEffectiveParallelLimit(node);
+            int effectiveDurationTicks = getEffectiveDurationTicks(node);
+            long effectiveEuPerTick = getEffectiveEuPerTick(node);
+            if (!node.locked || effectiveParallelLimit <= 0 || effectiveDurationTicks <= 0) {
                 if (debugRuntime) {
                     SuperFactory.LOG.info(
                         "[Super Integrated Factory/Runtime] 跳过节点: node={}, locked={}, duration={}, parallel={}",
                         describeNode(node),
                         node.locked,
-                        node.durationTicks,
-                        node.parallelLimit);
+                        effectiveDurationTicks,
+                        effectiveParallelLimit);
                 }
                 continue;
             }
@@ -2217,13 +2358,13 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             }
             startRecipeProcessing();
             try {
-                int parallel = getRunnableParallel(node, Math.max(1, node.parallelLimit), debugRuntime);
+                int parallel = getRunnableParallel(node, effectiveParallelLimit, debugRuntime);
                 if (parallel <= 0) {
                     continue;
                 }
                 if (canStartNode(node, parallel, debugRuntime)) {
-                    RunningJob job = new RunningJob(node.id, parallel, Math.max(1, node.durationTicks));
-                    long jobEuPerTick = safeMultiply(Math.max(0L, node.euPerTick), Math.max(1L, parallel));
+                    RunningJob job = new RunningJob(node.id, parallel, effectiveDurationTicks, effectiveEuPerTick);
+                    long jobEuPerTick = safeMultiply(effectiveEuPerTick, Math.max(1L, parallel));
                     long jobEnergy = safeMultiply(jobEuPerTick, Math.max(1L, job.durationTicks));
                     long totalEuAfterStart = safeAddLong(totalRunningEuPerTick(), jobEuPerTick);
                     if (!isWirelessModeEnabled() && !canStartWiredRuntimeJob(totalEuAfterStart)) {
@@ -2364,6 +2505,39 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             }
         }
         return count;
+    }
+
+    private int getGlobalParallelMultiplier() {
+        return Math.max(1, clampInputInt(INDEX_PARALLEL));
+    }
+
+    private int getGlobalExtraOverclocks() {
+        return Math.max(0, clampInputInt(INDEX_MANUAL_OVERCLOCKS));
+    }
+
+    private int getEffectiveParallelLimit(ProcessNode node) {
+        return (int) Math
+            .min(Integer.MAX_VALUE, safeMultiply(Math.max(1, node.parallelLimit), getGlobalParallelMultiplier()));
+    }
+
+    private int getEffectiveDurationTicks(ProcessNode node) {
+        long duration = Math.max(1L, node.durationTicks);
+        for (int i = 0; i < getGlobalExtraOverclocks(); i++) {
+            duration = Math.max(1L, (duration + 3L) / 4L);
+        }
+        return (int) Math.min(Integer.MAX_VALUE, duration);
+    }
+
+    private long getEffectiveEuPerTick(ProcessNode node) {
+        long euPerTick = Math.max(0L, node.euPerTick);
+        for (int i = 0; i < getGlobalExtraOverclocks(); i++) {
+            euPerTick = safeMultiply(euPerTick, 4L);
+        }
+        return euPerTick;
+    }
+
+    private long getJobEuPerTick(RunningJob job, ProcessNode node) {
+        return job.euPerTick > 0L ? job.euPerTick : getEffectiveEuPerTick(node);
     }
 
     private boolean canStartNode(ProcessNode node, int parallel, boolean debugRuntime) {
@@ -2568,7 +2742,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             for (int slot = 0; slot < node.inputHandler.getSlots(); slot++) {
                 ItemStack input = node.inputHandler.getStackInSlot(slot);
                 if (input != null && !isFluidDisplay(input) && itemMatches(input, template)) {
-                    reserve = Math.max(reserve, safeMultiply(getStackAmount(input), Math.max(1, node.parallelLimit)));
+                    reserve = Math.max(reserve, safeMultiply(getStackAmount(input), getEffectiveParallelLimit(node)));
                 }
             }
         }
@@ -2607,7 +2781,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
                 FluidStack input = GTUtility.getFluidFromDisplayStack(node.inputHandler.getStackInSlot(slot));
                 if (input != null && input.isFluidEqual(template)) {
                     reserve = Math
-                        .max(reserve, safeMultiply(Math.max(1L, input.amount), Math.max(1, node.parallelLimit)));
+                        .max(reserve, safeMultiply(Math.max(1L, input.amount), getEffectiveParallelLimit(node)));
                 }
             }
         }
@@ -2719,7 +2893,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private long getInternalItemLowWater(ProcessNode producer, ItemStack output, long perRun) {
-        long lowWater = safeMultiply(Math.max(1L, perRun), Math.max(1, producer.parallelLimit));
+        long lowWater = safeMultiply(Math.max(1L, perRun), getEffectiveParallelLimit(producer));
         for (ProcessEdge edge : runtimeGraph.edges) {
             if (edge.fromNodeId != producer.id) {
                 continue;
@@ -2732,7 +2906,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
                 ItemStack input = consumer.inputHandler.getStackInSlot(slot);
                 if (input != null && !isFluidDisplay(input) && itemMatches(input, output)) {
                     lowWater = Math
-                        .max(lowWater, safeMultiply(getStackAmount(input), Math.max(1, consumer.parallelLimit)));
+                        .max(lowWater, safeMultiply(getStackAmount(input), getEffectiveParallelLimit(consumer)));
                 }
             }
         }
@@ -2740,7 +2914,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private long getInternalFluidLowWater(ProcessNode producer, FluidStack output, long perRun) {
-        long lowWater = safeMultiply(Math.max(1L, perRun), Math.max(1, producer.parallelLimit));
+        long lowWater = safeMultiply(Math.max(1L, perRun), getEffectiveParallelLimit(producer));
         for (ProcessEdge edge : runtimeGraph.edges) {
             if (edge.fromNodeId != producer.id) {
                 continue;
@@ -2753,7 +2927,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
                 FluidStack input = GTUtility.getFluidFromDisplayStack(consumer.inputHandler.getStackInSlot(slot));
                 if (input != null && input.isFluidEqual(output)) {
                     lowWater = Math
-                        .max(lowWater, safeMultiply(Math.max(1L, input.amount), Math.max(1, consumer.parallelLimit)));
+                        .max(lowWater, safeMultiply(Math.max(1L, input.amount), getEffectiveParallelLimit(consumer)));
                 }
             }
         }
@@ -2857,7 +3031,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         ArrayList<String> lines = new ArrayList<>();
         for (RunningJob job : runningJobs) {
             ProcessNode node = runtimeGraph.findNode(job.nodeId);
-            if (node == null || !node.locked || node.durationTicks <= 0) {
+            if (node == null || !node.locked || job.durationTicks <= 0) {
                 continue;
             }
             int progress = Math.max(0, job.durationTicks - job.remainingTicks);
@@ -2902,7 +3076,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             rate = getStackAmount(output) * Math.max(1, job.parallel)
                 * chanceMultiplier
                 * 20.0D
-                / Math.max(1, node.durationTicks);
+                / Math.max(1, job.durationTicks);
             fluidRate = fluid != null;
             break;
         }
@@ -3371,7 +3545,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             }
             ProcessNode node = runtimeGraph.findNode(job.nodeId);
             if (node != null) {
-                totalEu = safeAddLong(totalEu, safeMultiply(Math.max(0L, node.euPerTick), Math.max(1, job.parallel)));
+                totalEu = safeAddLong(totalEu, safeMultiply(getJobEuPerTick(job, node), Math.max(1, job.parallel)));
             }
         }
         mMaxProgresstime = maxDuration;
@@ -4013,20 +4187,208 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         }
     }
 
+    private static final class RawMaterialExportPlan {
+
+        private final List<ItemStack> items = new ArrayList<>();
+        private final List<FluidStack> fluids = new ArrayList<>();
+        private final List<String> oreDictionaryNodes = new ArrayList<>();
+    }
+
+    private static final class RawMaterialMarkerTarget {
+
+        private final Object hatch;
+        private final ItemStack[] itemMarkers;
+        private final FluidStack[] fluidMarkers;
+        private final int itemSlotOffset;
+        private int nextItemSlot;
+        private int nextFluidSlot;
+
+        private RawMaterialMarkerTarget(Object hatch, ItemStack[] itemMarkers, FluidStack[] fluidMarkers,
+            int itemSlotOffset) {
+            this.hatch = hatch;
+            this.itemMarkers = itemMarkers;
+            this.fluidMarkers = fluidMarkers;
+            this.itemSlotOffset = itemSlotOffset;
+        }
+
+        private static RawMaterialMarkerTarget tryCreate(Object hatch) {
+            if (hatch == null) {
+                return null;
+            }
+            ItemStack[] dualItems = readItemArrayField(hatch, "i_mark");
+            FluidStack[] dualFluids = readFluidArrayField(hatch, "f_mark");
+            if (dualItems != null || dualFluids != null) {
+                return new RawMaterialMarkerTarget(hatch, dualItems, dualFluids, -1);
+            }
+            ItemStack[] itemMarkers = null;
+            int itemSlotOffset = -1;
+            ItemStack[] shadowInventory = readItemArrayField(hatch, "shadowInventory");
+            if (shadowInventory != null && hatch instanceof MTEHatchInputBus bus) {
+                itemMarkers = new ItemStack[shadowInventory.length];
+                itemSlotOffset = 0;
+                for (int i = 0; i < itemMarkers.length; i++) {
+                    itemMarkers[i] = bus.getStackInSlot(i);
+                }
+            }
+            FluidStack[] fluidMarkers = readFluidArrayField(hatch, "storedFluids");
+            if (itemMarkers == null && fluidMarkers == null) {
+                return null;
+            }
+            return new RawMaterialMarkerTarget(hatch, itemMarkers, fluidMarkers, itemSlotOffset);
+        }
+
+        private boolean isCombined() {
+            return itemMarkers != null && fluidMarkers != null;
+        }
+
+        private int itemCapacity() {
+            return itemMarkers == null ? 0 : itemMarkers.length;
+        }
+
+        private int fluidCapacity() {
+            return fluidMarkers == null ? 0 : fluidMarkers.length;
+        }
+
+        private void clear() {
+            setAutoPull(false);
+            if (itemMarkers != null) {
+                for (int i = 0; i < itemMarkers.length; i++) {
+                    setItemMarker(i, null);
+                }
+            }
+            if (fluidMarkers != null) {
+                for (int i = 0; i < fluidMarkers.length; i++) {
+                    setFluidMarker(i, null);
+                }
+            }
+            markTargetDirty();
+        }
+
+        private boolean addItem(ItemStack stack) {
+            if (itemMarkers == null || nextItemSlot >= itemMarkers.length) {
+                return false;
+            }
+            setItemMarker(nextItemSlot++, stack == null ? null : GTUtility.copyAmount(1, stack));
+            markTargetDirty();
+            return true;
+        }
+
+        private boolean addFluid(FluidStack stack) {
+            if (fluidMarkers == null || nextFluidSlot >= fluidMarkers.length) {
+                return false;
+            }
+            setFluidMarker(nextFluidSlot++, stack == null ? null : GTUtility.copyAmount(1, stack));
+            markTargetDirty();
+            return true;
+        }
+
+        private void setItemMarker(int slot, ItemStack stack) {
+            if (itemMarkers == null || slot < 0 || slot >= itemMarkers.length) {
+                return;
+            }
+            itemMarkers[slot] = stack == null ? null : stack.copy();
+            if (itemSlotOffset >= 0 && hatch instanceof MTEHatchInputBus bus) {
+                bus.setInventorySlotContents(itemSlotOffset + slot, stack == null ? null : stack.copy());
+            }
+            invoke(hatch, "updateInformationSlot", new Class<?>[] { int.class, ItemStack.class }, slot, stack);
+        }
+
+        private void setFluidMarker(int slot, FluidStack stack) {
+            if (fluidMarkers == null || slot < 0 || slot >= fluidMarkers.length) {
+                return;
+            }
+            fluidMarkers[slot] = stack == null ? null : stack.copy();
+            invoke(hatch, "updateInformationSlotF", new Class<?>[] { int.class }, slot);
+            invoke(hatch, "updateInformationSlot", new Class<?>[] { int.class }, slot);
+        }
+
+        private void setAutoPull(boolean enabled) {
+            invoke(hatch, "setAutoPullItemList", new Class<?>[] { boolean.class }, enabled);
+            invoke(hatch, "setAutoPullFluidList", new Class<?>[] { boolean.class }, enabled);
+        }
+
+        private void markTargetDirty() {
+            if (hatch instanceof IMetaTileEntity meta && meta.getBaseMetaTileEntity() != null) {
+                meta.getBaseMetaTileEntity()
+                    .markDirty();
+            }
+        }
+
+        private static ItemStack[] readItemArrayField(Object target, String name) {
+            Object value = readField(target, name);
+            return value instanceof ItemStack[]stacks ? stacks : null;
+        }
+
+        private static FluidStack[] readFluidArrayField(Object target, String name) {
+            Object value = readField(target, name);
+            return value instanceof FluidStack[]stacks ? stacks : null;
+        }
+
+        private static Object readField(Object target, String name) {
+            Field field = findField(target.getClass(), name);
+            if (field == null) {
+                return null;
+            }
+            try {
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (IllegalAccessException ignored) {
+                return null;
+            }
+        }
+
+        private static Field findField(Class<?> type, String name) {
+            Class<?> current = type;
+            while (current != null) {
+                try {
+                    return current.getDeclaredField(name);
+                } catch (NoSuchFieldException ignored) {
+                    current = current.getSuperclass();
+                }
+            }
+            return null;
+        }
+
+        private static void invoke(Object target, String name, Class<?>[] parameterTypes, Object... args) {
+            Method method = findMethod(target.getClass(), name, parameterTypes);
+            if (method == null) {
+                return;
+            }
+            try {
+                method.setAccessible(true);
+                method.invoke(target, args);
+            } catch (ReflectiveOperationException ignored) {}
+        }
+
+        private static Method findMethod(Class<?> type, String name, Class<?>[] parameterTypes) {
+            Class<?> current = type;
+            while (current != null) {
+                try {
+                    return current.getDeclaredMethod(name, parameterTypes);
+                } catch (NoSuchMethodException ignored) {
+                    current = current.getSuperclass();
+                }
+            }
+            return null;
+        }
+    }
+
     private static final class RunningJob {
 
         private final int nodeId;
         private final int parallel;
         private final int durationTicks;
+        private final long euPerTick;
         private int remainingTicks;
         private long reservedEnergy;
         private final List<ItemStack> consumedItems = new ArrayList<>();
         private final List<FluidStack> consumedFluids = new ArrayList<>();
 
-        private RunningJob(int nodeId, int parallel, int durationTicks) {
+        private RunningJob(int nodeId, int parallel, int durationTicks, long euPerTick) {
             this.nodeId = nodeId;
             this.parallel = Math.max(1, parallel);
             this.durationTicks = Math.max(1, durationTicks);
+            this.euPerTick = Math.max(0L, euPerTick);
             this.remainingTicks = this.durationTicks;
         }
 
@@ -4035,6 +4397,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             tag.setInteger("NodeId", nodeId);
             tag.setInteger("Parallel", parallel);
             tag.setInteger("DurationTicks", durationTicks);
+            tag.setLong("EUt", euPerTick);
             tag.setInteger("RemainingTicks", remainingTicks);
             tag.setLong("ReservedEnergy", reservedEnergy);
             NBTTagList items = new NBTTagList();
@@ -4058,7 +4421,8 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             RunningJob job = new RunningJob(
                 tag.getInteger("NodeId"),
                 tag.getInteger("Parallel"),
-                tag.getInteger("DurationTicks"));
+                tag.getInteger("DurationTicks"),
+                tag.getLong("EUt"));
             job.remainingTicks = Math.max(0, tag.getInteger("RemainingTicks"));
             job.reservedEnergy = Math.max(0L, tag.getLong("ReservedEnergy"));
             NBTTagList items = tag.getTagList("ConsumedItems", Constants.NBT.TAG_COMPOUND);
@@ -4092,10 +4456,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         return value <= 0 ? LedStatus.STATUS_NEUTRAL : LedStatus.STATUS_OK;
     }
 
-    private LedStatus requiredPositiveStatus(double value) {
-        return value >= 1 ? LedStatus.STATUS_OK : LedStatus.STATUS_TOO_LOW;
-    }
-
     private LedStatus parallelStatus(double value) {
         return value < 1 ? LedStatus.STATUS_TOO_LOW : LedStatus.STATUS_OK;
     }
@@ -4104,37 +4464,10 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         double[] inputs = inputValues();
         inputs[INDEX_PARALLEL] = Math.max(1D, Math.min(Integer.MAX_VALUE, Math.round(inputs[INDEX_PARALLEL])));
         inputs[INDEX_MANUAL_OVERCLOCKS] = Math.max(0D, Math.min(64D, Math.round(inputs[INDEX_MANUAL_OVERCLOCKS])));
-        if (isRuntimeAdjustmentEnabled()) {
-            inputs[INDEX_MIN_TIME] = Math.max(1D, Math.round(inputs[INDEX_MIN_TIME]));
-        } else {
-            inputs[INDEX_MIN_TIME] = 1D;
-            inputs[INDEX_MAX_TIME] = 0D;
-        }
-        if (isMultiplierAdjustmentEnabled()) {
-            inputs[INDEX_ITEM_MULTIPLIER] = Math
-                .max(0D, Math.min(Integer.MAX_VALUE, Math.round(inputs[INDEX_ITEM_MULTIPLIER])));
-            inputs[INDEX_FLUID_MULTIPLIER] = Math
-                .max(0D, Math.min(Integer.MAX_VALUE, Math.round(inputs[INDEX_FLUID_MULTIPLIER])));
-        } else {
-            inputs[INDEX_ITEM_MULTIPLIER] = 0D;
-            inputs[INDEX_FLUID_MULTIPLIER] = 0D;
-        }
-        if (!isOutputRangeAdjustmentEnabled()) {
-            inputs[INDEX_ITEM_MIN] = 0D;
-            inputs[INDEX_FLUID_MIN] = 0D;
-            inputs[INDEX_ITEM_MAX] = 0D;
-            inputs[INDEX_FLUID_MAX] = 0D;
-        }
-        if (inputs[INDEX_MAX_TIME] > 0 && inputs[INDEX_MAX_TIME] < inputs[INDEX_MIN_TIME]) {
-            inputs[INDEX_MAX_TIME] = inputs[INDEX_MIN_TIME];
-        }
-        if (inputs[INDEX_ITEM_MAX] > 0 && inputs[INDEX_ITEM_MIN] > 0
-            && inputs[INDEX_ITEM_MAX] < inputs[INDEX_ITEM_MIN]) {
-            inputs[INDEX_ITEM_MAX] = inputs[INDEX_ITEM_MIN];
-        }
-        if (inputs[INDEX_FLUID_MAX] > 0 && inputs[INDEX_FLUID_MIN] > 0
-            && inputs[INDEX_FLUID_MAX] < inputs[INDEX_FLUID_MIN]) {
-            inputs[INDEX_FLUID_MAX] = inputs[INDEX_FLUID_MIN];
+        for (int i = 0; i < inputs.length; i++) {
+            if (i != INDEX_WIRELESS && i != INDEX_PARALLEL && i != INDEX_MANUAL_OVERCLOCKS) {
+                inputs[i] = 0D;
+            }
         }
     }
 

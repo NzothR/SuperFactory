@@ -28,6 +28,7 @@ import org.lwjgl.opengl.GL11;
 
 import com.gtnewhorizons.modularui.api.forge.ItemStackHandler;
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
+import com.nzoth.superfactory.common.network.MessageExportProcessRawMaterials;
 import com.nzoth.superfactory.common.network.MessageSubmitProcessRequirements;
 import com.nzoth.superfactory.common.network.MessageUpdateProcessGraph;
 import com.nzoth.superfactory.common.network.NetworkLoader;
@@ -174,12 +175,20 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             toolbarTop + 120,
             24,
             20,
+            "原",
+            tr("superfactory.machine.super_integrated_factory.process.export_raw_materials"),
+            this::exportRawMaterials);
+        addCanvasButton(
+            toolbarLeft,
+            toolbarTop + 144,
+            24,
+            20,
             "S",
             tr("superfactory.machine.super_integrated_factory.process.submit"),
             this::submitProcess);
         addCanvasButton(
             toolbarLeft,
-            toolbarTop + 144,
+            toolbarTop + 168,
             24,
             20,
             "X",
@@ -2152,7 +2161,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
 
     private String recipeGroupKey(RecipeMap<?> recipeMap, GTRecipe recipe) {
         return recipeMap.unlocalizedName + "|i="
-            + groupedItemKey(recipeConsumableInputs(recipe))
+            + exactItemKey(recipeConsumableInputs(recipe))
             + "|fi="
             + groupedFluidKey(recipe.mFluidInputs)
             + "|o="
@@ -2167,6 +2176,17 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             + recipe.mDuration
             + "|e="
             + recipe.mEUt;
+    }
+
+    private String exactItemKey(ItemStack[] stacks) {
+        List<String> parts = new ArrayList<>();
+        for (ItemStack stack : safeItems(stacks)) {
+            if (stack != null) {
+                parts.add(ProcessNode.stackFingerprint(stack));
+            }
+        }
+        parts.sort(String::compareTo);
+        return parts.toString();
     }
 
     private String groupedItemKey(ItemStack[] stacks) {
@@ -2773,16 +2793,31 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 : java.util.Collections.emptyList();
             if (!preferred.isEmpty()) {
                 variantsBySlot.add(preferred);
-            } else if (expandFallbackVariants) {
-                variantsBySlot.add(oreVariantsFor(stack));
             } else {
-                List<ItemStack> singleton = new ArrayList<>();
-                addUniqueVariant(singleton, stack);
-                variantsBySlot.add(singleton);
+                variantsBySlot.add(recipeInputVariantsFor(recipe, slot, stack, expandFallbackVariants));
             }
             slot++;
         }
         return variantsBySlot;
+    }
+
+    private List<ItemStack> recipeInputVariantsFor(GTRecipe recipe, int slot, ItemStack stack,
+        boolean expandFallbackVariants) {
+        if (recipe instanceof GTRecipe.GTRecipe_WithAlt recipeWithAlt && recipeWithAlt.mOreDictAlt != null
+            && slot >= 0
+            && slot < recipeWithAlt.mOreDictAlt.length
+            && recipeWithAlt.mOreDictAlt[slot] != null
+            && recipeWithAlt.mOreDictAlt[slot].length > 0) {
+            List<ItemStack> variants = new ArrayList<>();
+            addUniqueVariant(variants, stack);
+            for (ItemStack alt : recipeWithAlt.mOreDictAlt[slot]) {
+                addUniqueVariant(variants, withDisplayAmount(alt, getEditableAmount(stack)));
+            }
+            return variants;
+        }
+        List<ItemStack> singleton = new ArrayList<>();
+        addUniqueVariant(singleton, stack);
+        return singleton;
     }
 
     private void mergeCandidateInputVariants(List<List<ItemStack>> variantsBySlot, GTRecipe recipe) {
@@ -3164,6 +3199,21 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                     result.requirements.writeToNBT()));
         }
         closeGui();
+    }
+
+    private void exportRawMaterials() {
+        ProcessBuildResult result = validateProcessGraph();
+        if (!result.ok) {
+            showError(result.message);
+            return;
+        }
+        if (factory.getBaseMetaTileEntity() != null) {
+            syncGraph();
+            NetworkLoader.INSTANCE.sendToServer(new MessageExportProcessRawMaterials(factory.getBaseMetaTileEntity()));
+            showStatus(
+                tr("superfactory.machine.super_integrated_factory.process.status.raw_material_export_requested"),
+                0xFFD8E8F6);
+        }
     }
 
     private ProcessBuildResult buildProcessSubmission(boolean requireRequirements) {
@@ -4110,6 +4160,10 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
 
     private void showError(String message) {
         showStatus(message, 0xFFFF7777);
+    }
+
+    public void showServerStatus(String message, int color) {
+        showStatus(message, color);
     }
 
     private void showStatus(String message, int color) {

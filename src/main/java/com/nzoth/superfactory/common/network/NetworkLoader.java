@@ -30,5 +30,15 @@ public final class NetworkLoader {
             MessageSubmitProcessRequirements.class,
             nextId++,
             Side.SERVER);
+        INSTANCE.registerMessage(
+            MessageExportProcessRawMaterials.Handler.class,
+            MessageExportProcessRawMaterials.class,
+            nextId++,
+            Side.SERVER);
+        INSTANCE.registerMessage(
+            MessageProcessCanvasStatus.Handler.class,
+            MessageProcessCanvasStatus.class,
+            nextId++,
+            Side.CLIENT);
     }
 }

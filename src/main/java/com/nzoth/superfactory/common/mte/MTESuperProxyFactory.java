@@ -153,6 +153,7 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
     private int lastWirelessBaseDuration;
     private boolean wirelessRecipeRunning;
     private int lastAppliedOverclocks;
+    private final Map<String, List<GTRecipe>> successfulRecipeCache = new LinkedHashMap<>();
     /** Snapshot used for GUI/output display only; real consumption is performed against hatch inventories. */
     private List<ItemStack> inputSnapshotItems = new ArrayList<>();
     private List<FluidStack> inputSnapshotFluids = new ArrayList<>();
@@ -620,6 +621,8 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             .addInfo(tr("superfactory.machine.super_proxy_factory.tooltip.2"))
             .addInfo(tr("superfactory.machine.super_proxy_factory.tooltip.3"))
             .addInfo(tr("superfactory.machine.super_proxy_factory.tooltip.4"))
+            .addInfo(tr("superfactory.machine.super_proxy_factory.tooltip.5"))
+            .addInfo(tr("superfactory.machine.super_proxy_factory.tooltip.6"))
             .beginStructureBlock(3, 3, 3, false)
             .addController(tr("superfactory.machine.super_proxy_factory.tooltip.controller"))
             .addInputBus(tr("superfactory.machine.super_proxy_factory.tooltip.any_casing"), 1)
@@ -813,6 +816,7 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         cachedRecipeMapNames = recipeMaps;
         cachedRecipeMapIndex = Math.min(cachedRecipeMapIndex, cachedRecipeMapNames.size() - 1);
         setSingleRecipeCheck(null);
+        clearSuccessfulRecipeCache();
         currentOutputDisplayLines = new ArrayList<>();
         recipeLockDisplayLines = buildRecipeLockDisplayLines();
         cachedMachineMeta = meta;
@@ -1593,6 +1597,7 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         cachedMachineCount = 0;
         cachedParallelLimit = 1;
         lastCacheMessage = message;
+        clearSuccessfulRecipeCache();
     }
 
     private void maybePlayLoopingSound() {
@@ -1820,12 +1825,27 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         CheckRecipeResult lastFailure = CheckRecipeResultRegistry.NO_RECIPE;
         Set<GTRecipe> seenRecipes = Collections.newSetFromMap(new IdentityHashMap<>());
 
+        for (GTRecipe recipe : getSuccessfulCachedRecipes(recipeMap)) {
+            if (recipe == null || recipe.mFakeRecipe || !recipe.mEnabled || !seenRecipes.add(recipe)) {
+                continue;
+            }
+            CheckRecipeResult foundResult = tryExecuteRecipe(recipeMap, inputGroup, recipe, null);
+            if (foundResult.wasSuccessful()) {
+                rememberSuccessfulRecipe(recipeMap, recipe);
+                return foundResult;
+            }
+            if (foundResult != CheckRecipeResultRegistry.NO_RECIPE) {
+                lastFailure = foundResult;
+            }
+        }
+
         for (GTRecipe recipe : recipeMap.getAllRecipes()) {
             if (recipe == null || recipe.mFakeRecipe || !recipe.mEnabled || !seenRecipes.add(recipe)) {
                 continue;
             }
             CheckRecipeResult foundResult = tryExecuteRecipe(recipeMap, inputGroup, recipe, null);
             if (foundResult.wasSuccessful()) {
+                rememberSuccessfulRecipe(recipeMap, recipe);
                 return foundResult;
             }
             if (foundResult != CheckRecipeResultRegistry.NO_RECIPE) {
@@ -1833,6 +1853,32 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             }
         }
         return lastFailure;
+    }
+
+    private List<GTRecipe> getSuccessfulCachedRecipes(RecipeMap<?> recipeMap) {
+        if (recipeMap == null || Config.superProxyFactorySuccessfulRecipeCacheSize <= 0) {
+            return Collections.emptyList();
+        }
+        List<GTRecipe> recipes = successfulRecipeCache.get(recipeMap.unlocalizedName);
+        return recipes == null || recipes.isEmpty() ? Collections.emptyList() : new ArrayList<>(recipes);
+    }
+
+    private void rememberSuccessfulRecipe(RecipeMap<?> recipeMap, GTRecipe recipe) {
+        int capacity = Config.superProxyFactorySuccessfulRecipeCacheSize;
+        if (recipeMap == null || recipe == null || capacity <= 0) {
+            return;
+        }
+        List<GTRecipe> recipes = successfulRecipeCache
+            .computeIfAbsent(recipeMap.unlocalizedName, ignored -> new ArrayList<>());
+        recipes.remove(recipe);
+        recipes.add(0, recipe);
+        while (recipes.size() > capacity) {
+            recipes.remove(recipes.size() - 1);
+        }
+    }
+
+    private void clearSuccessfulRecipeCache() {
+        successfulRecipeCache.clear();
     }
 
     private CheckRecipeResult tryExecuteRecipe(RecipeMap<?> recipeMap, ProxyRecipeInputGroup inputGroup,

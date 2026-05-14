@@ -193,6 +193,8 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     private final List<RunningJob> runningJobs = new ArrayList<>();
     /** Synced, fixed-size source for the main GUI runtime output estimate lines. */
     private List<String> runtimeOutputEstimateLines = new ArrayList<>();
+    private final List<ProcessNode> cachedSchedulingOrder = new ArrayList<>();
+    private RuntimeResourceSnapshot runtimeResourceSnapshot;
     private int factoryMode = MODE_STANDBY;
     private int ioCycleTicks;
     private long lastEnergySetupFailureLogTick = Long.MIN_VALUE;
@@ -507,6 +509,10 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             .addMachineType(tr("superfactory.machine.super_integrated_factory.tooltip.type"))
             .addInfo(tr("superfactory.machine.super_integrated_factory.tooltip.1"))
             .addInfo(tr("superfactory.machine.super_integrated_factory.tooltip.2"))
+            .addInfo(tr("superfactory.machine.super_integrated_factory.tooltip.3"))
+            .addInfo(tr("superfactory.machine.super_integrated_factory.tooltip.4"))
+            .addInfo(tr("superfactory.machine.super_integrated_factory.tooltip.5"))
+            .addInfo(tr("superfactory.machine.super_integrated_factory.tooltip.6"))
             .beginStructureBlock(3, 3, 3, false)
             .addController(tr("superfactory.machine.super_integrated_factory.tooltip.controller"))
             .addInputBus(tr("superfactory.machine.super_integrated_factory.tooltip.any_casing"), 1)
@@ -553,7 +559,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             .widget(new FakeSyncWidget.IntegerSyncer(() -> ioCycleTicks, value -> ioCycleTicks = value))
             .widget(
                 new FakeSyncWidget.StringSyncer(
-                    () -> serializeLines(runtimeOutputEstimateLines),
+                    () -> serializeLines(getRuntimeOutputEstimateLinesForSync(true)),
                     value -> runtimeOutputEstimateLines = deserializeLines(value)))
             .widget(
                 new FakeSyncWidget<>(
@@ -646,6 +652,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         }
         if (aNBT.hasKey("RuntimeGraph", net.minecraftforge.common.util.Constants.NBT.TAG_COMPOUND)) {
             runtimeGraph.readFromNBT(aNBT.getCompoundTag("RuntimeGraph"));
+            rebuildRuntimeSchedulingCache();
         }
         if (aNBT.hasKey("PendingRuntimeGraph", net.minecraftforge.common.util.Constants.NBT.TAG_COMPOUND)) {
             pendingRuntimeGraph.readFromNBT(aNBT.getCompoundTag("PendingRuntimeGraph"));
@@ -2027,6 +2034,17 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         return runtimeOutputEstimateLines.get(index);
     }
 
+    private List<String> getRuntimeOutputEstimateLinesForSync(boolean mainGuiOpen) {
+        if (shouldUpdateRuntimeOutputLines(mainGuiOpen)) {
+            runtimeOutputEstimateLines = buildActiveRuntimeOutputLines();
+        }
+        return runtimeOutputEstimateLines;
+    }
+
+    private boolean shouldUpdateRuntimeOutputLines(boolean mainGuiOpen) {
+        return factoryMode == MODE_RUNNING && (mainGuiOpen || activeProcessGui != null);
+    }
+
     private String getModeDisplayName() {
         return switch (factoryMode) {
             case MODE_INPUT -> tr("superfactory.machine.super_integrated_factory.mode.input");
@@ -2160,21 +2178,28 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             getBaseMetaTileEntity().markDirty();
             return;
         }
-        flushOutputBuffers();
-        advanceRunningJobs();
-        if (!isWirelessModeEnabled() && !runningJobs.isEmpty() && !canSustainWiredRuntimePower()) {
-            stopMachine(ShutDownReasonRegistry.POWER_LOSS);
-            clearMachineWorkDisplay();
+        try {
+            flushOutputBuffers();
+            runtimeResourceSnapshot = buildRuntimeResourceSnapshot();
+            advanceRunningJobs();
+            if (!isWirelessModeEnabled() && !runningJobs.isEmpty() && !canSustainWiredRuntimePower()) {
+                stopMachine(ShutDownReasonRegistry.POWER_LOSS);
+                clearMachineWorkDisplay();
+                getBaseMetaTileEntity().markDirty();
+                return;
+            }
+            scheduleRunnableNodes(debugRuntime);
+            updateRuntimeProgressDisplay();
+            if (shouldUpdateRuntimeOutputLines(false)) {
+                runtimeOutputEstimateLines = buildActiveRuntimeOutputLines();
+            }
+            if (debugRuntime) {
+                lastRuntimeDebugLogTick = tick;
+            }
             getBaseMetaTileEntity().markDirty();
-            return;
+        } finally {
+            runtimeResourceSnapshot = null;
         }
-        scheduleRunnableNodes(debugRuntime);
-        updateRuntimeProgressDisplay();
-        runtimeOutputEstimateLines = buildActiveRuntimeOutputLines();
-        if (debugRuntime) {
-            lastRuntimeDebugLogTick = tick;
-        }
-        getBaseMetaTileEntity().markDirty();
     }
 
     /*
@@ -2254,6 +2279,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         totalProcessSteps = 0;
         processRequirements.clear();
         runtimeGraph.readFromNBT(new ProcessGraph().writeToNBT());
+        rebuildRuntimeSchedulingCache();
         internalItems.clear();
         internalFluids.clear();
         outputItems.clear();
@@ -2266,6 +2292,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         pendingProcessRequirements.clear();
         processRequirements.readFromNBT(pending.writeToNBT());
         runtimeGraph.readFromNBT(pendingRuntimeGraph.writeToNBT());
+        rebuildRuntimeSchedulingCache();
         pendingRuntimeGraph.readFromNBT(new ProcessGraph().writeToNBT());
         resetStoredRequirementProgress(processRequirements);
         clearRuntimeBuffers();
@@ -2341,7 +2368,15 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private void scheduleRunnableNodes(boolean debugRuntime) {
+        scheduleRunnableNodes(debugRuntime, true);
+        scheduleRunnableNodes(debugRuntime, false);
+    }
+
+    private void scheduleRunnableNodes(boolean debugRuntime, boolean requireInternalInput) {
         for (ProcessNode node : buildSchedulingOrder()) {
+            if (requireInternalInput != consumesAvailableInternalInput(node)) {
+                continue;
+            }
             int effectiveParallelLimit = getEffectiveParallelLimit(node);
             int effectiveDurationTicks = getEffectiveDurationTicks(node);
             long effectiveEuPerTick = getEffectiveEuPerTick(node);
@@ -2413,13 +2448,21 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private List<ProcessNode> buildSchedulingOrder() {
+        if (!cachedSchedulingOrder.isEmpty()) {
+            return cachedSchedulingOrder;
+        }
+        rebuildRuntimeSchedulingCache();
+        return cachedSchedulingOrder;
+    }
+
+    private void rebuildRuntimeSchedulingCache() {
+        cachedSchedulingOrder.clear();
         ArrayList<ProcessNode> nodes = new ArrayList<>(runtimeGraph.nodes);
         Map<Integer, Integer> terminalDistanceCache = new LinkedHashMap<>();
         nodes.sort(
-            Comparator.comparing((ProcessNode node) -> consumesAvailableInternalInput(node) ? 0 : 1)
-                .thenComparingInt(node -> distanceToTerminal(node, terminalDistanceCache))
+            Comparator.comparingInt((ProcessNode node) -> distanceToTerminal(node, terminalDistanceCache))
                 .thenComparingInt(node -> node.id));
-        return nodes;
+        cachedSchedulingOrder.addAll(nodes);
     }
 
     private boolean consumesAvailableInternalInput(ProcessNode node) {
@@ -2430,14 +2473,174 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             }
             if (isFluidDisplay(input)) {
                 FluidStack fluid = GTUtility.getFluidFromDisplayStack(input);
-                if (countFluidInBuffer(internalFluids, fluid) >= getStackAmount(input)) {
+                long available = runtimeResourceSnapshot == null ? countFluidInBuffer(internalFluids, fluid)
+                    : runtimeResourceSnapshot.internalFluidAmount(fluid);
+                if (available >= getStackAmount(input)) {
                     return true;
                 }
-            } else if (countItemInBuffer(internalItems, input) >= getStackAmount(input)) {
-                return true;
+            } else {
+                long available = runtimeResourceSnapshot == null ? countItemInBuffer(internalItems, input)
+                    : runtimeResourceSnapshot.internalItemAmount(input);
+                if (available >= getStackAmount(input)) {
+                    return true;
+                }
             }
         }
         return false;
+    }
+
+    private RuntimeResourceSnapshot buildRuntimeResourceSnapshot() {
+        startRecipeProcessing();
+        try {
+            RuntimeResourceSnapshot snapshot = new RuntimeResourceSnapshot();
+            snapshot.captureInternalItems(internalItems);
+            snapshot.captureInternalFluids(internalFluids);
+            snapshot.captureLiveItems(normalizeLiveItemRefs(getStoredInputs()));
+            snapshot.captureLiveFluids(normalizeLiveFluidRefs(getStoredFluids()));
+            snapshot.captureDualInputs();
+            return snapshot;
+        } finally {
+            endRecipeProcessing();
+        }
+    }
+
+    private ItemStack[] normalizeLiveItemRefs(List<ItemStack> stacks) {
+        if (stacks == null || stacks.isEmpty()) {
+            return GTValues.emptyItemStackArray;
+        }
+        ArrayList<ItemStack> normalized = new ArrayList<>();
+        Set<ItemStack> seen = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        for (ItemStack stack : stacks) {
+            if (stack != null && stack.stackSize > 0 && seen.add(stack)) {
+                normalized.add(stack);
+            }
+        }
+        return normalized.toArray(new ItemStack[0]);
+    }
+
+    private FluidStack[] normalizeLiveFluidRefs(List<FluidStack> fluids) {
+        if (fluids == null || fluids.isEmpty()) {
+            return GTValues.emptyFluidStackArray;
+        }
+        ArrayList<FluidStack> normalized = new ArrayList<>();
+        Set<FluidStack> seen = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        for (FluidStack stack : fluids) {
+            if (stack != null && stack.amount > 0 && seen.add(stack)) {
+                normalized.add(stack);
+            }
+        }
+        return normalized.toArray(new FluidStack[0]);
+    }
+
+    private final class RuntimeResourceSnapshot {
+
+        private final List<BufferedItemStack> internalItemView = new ArrayList<>();
+        private final List<BufferedFluidStack> internalFluidView = new ArrayList<>();
+        private final List<BufferedItemStack> liveItemView = new ArrayList<>();
+        private final List<BufferedFluidStack> liveFluidView = new ArrayList<>();
+        private final List<BufferedItemStack> dualItemView = new ArrayList<>();
+        private final List<BufferedFluidStack> dualFluidView = new ArrayList<>();
+
+        private void captureInternalItems(List<BufferedItemStack> source) {
+            for (BufferedItemStack entry : source) {
+                if (entry != null && entry.stack != null && entry.amount > 0L) {
+                    addItemToBuffer(internalItemView, entry.stack, entry.amount);
+                }
+            }
+        }
+
+        private void captureInternalFluids(List<BufferedFluidStack> source) {
+            for (BufferedFluidStack entry : source) {
+                if (entry != null && entry.fluidStack != null && entry.amount > 0L) {
+                    addFluidToBuffer(internalFluidView, entry.fluidStack, entry.amount);
+                }
+            }
+        }
+
+        private void captureLiveItems(ItemStack[] stacks) {
+            for (ItemStack stack : stacks) {
+                if (stack != null && stack.stackSize > 0) {
+                    addItemToBuffer(liveItemView, stack, stack.stackSize);
+                }
+            }
+        }
+
+        private void captureLiveFluids(FluidStack[] fluids) {
+            for (FluidStack stack : fluids) {
+                if (stack != null && stack.amount > 0) {
+                    addFluidToBuffer(liveFluidView, stack, stack.amount);
+                }
+            }
+        }
+
+        private void captureDualInputs() {
+            for (IDualInputHatch hatch : mDualInputHatches) {
+                if (hatch == null) {
+                    continue;
+                }
+                for (Iterator<? extends IDualInputInventory> iterator = hatch.inventories(); iterator.hasNext();) {
+                    IDualInputInventory inventory = iterator.next();
+                    if (inventory == null || inventory.isEmpty()) {
+                        continue;
+                    }
+                    ItemStack[] items = inventory.getItemInputs();
+                    if (items != null) {
+                        for (ItemStack stack : items) {
+                            if (stack != null && stack.stackSize > 0) {
+                                addItemToBuffer(dualItemView, stack, stack.stackSize);
+                            }
+                        }
+                    }
+                    if (!hatch.supportsFluids()) {
+                        continue;
+                    }
+                    FluidStack[] fluids = inventory.getFluidInputs();
+                    if (fluids != null) {
+                        for (FluidStack stack : fluids) {
+                            if (stack != null && stack.amount > 0) {
+                                addFluidToBuffer(dualFluidView, stack, stack.amount);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private long internalItemAmount(ItemStack template) {
+            return countItemInBuffer(internalItemView, template);
+        }
+
+        private long internalFluidAmount(FluidStack template) {
+            return countFluidInBuffer(internalFluidView, template);
+        }
+
+        private long consumableInternalItemAmount(ItemStack template) {
+            long stored = internalItemAmount(template);
+            if (isCyclicItemTarget(template)) {
+                return Math.max(0L, stored - getCyclicItemReserveMin(template));
+            }
+            return stored;
+        }
+
+        private long consumableInternalFluidAmount(FluidStack template) {
+            long stored = internalFluidAmount(template);
+            if (isCyclicFluidTarget(template)) {
+                return Math.max(0L, stored - getCyclicFluidReserveMin(template));
+            }
+            return stored;
+        }
+
+        private long itemAmount(ItemStack template) {
+            return safeAddLong(
+                safeAddLong(consumableInternalItemAmount(template), countItemInBuffer(liveItemView, template)),
+                countItemInBuffer(dualItemView, template));
+        }
+
+        private long fluidAmount(FluidStack template) {
+            return safeAddLong(
+                safeAddLong(consumableInternalFluidAmount(template), countFluidInBuffer(liveFluidView, template)),
+                countFluidInBuffer(dualFluidView, template));
+        }
     }
 
     private int distanceToTerminal(ProcessNode node, Map<Integer, Integer> cache) {
@@ -3397,6 +3600,9 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private long availableItemAmount(ItemStack template) {
+        if (runtimeResourceSnapshot != null) {
+            return runtimeResourceSnapshot.itemAmount(template);
+        }
         long amount = countConsumableInternalItemAmount(template);
         for (ItemStack stack : getStoredInputs()) {
             if (stack != null && stack.stackSize > 0 && itemMatches(template, stack)) {
@@ -3409,6 +3615,9 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     private long availableFluidAmount(FluidStack template) {
         if (template == null) {
             return 0L;
+        }
+        if (runtimeResourceSnapshot != null) {
+            return runtimeResourceSnapshot.fluidAmount(template);
         }
         long amount = countConsumableInternalFluidAmount(template);
         for (FluidStack available : getStoredFluids()) {

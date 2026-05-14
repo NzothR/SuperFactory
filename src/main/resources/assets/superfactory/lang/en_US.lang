@@ -3,7 +3,7 @@ superfactory.common.off=Off
 superfactory.common.disabled=Disabled
 superfactory.common.parameter=Parameter
 
-superfactory.machine.super_proxy_factory.name=Super Proxy Factory
+superfactory.machine.super_proxy_factory.name=Recipe Proxy Nexus
 
 superfactory.machine.super_proxy_factory.param.batch=Batch Enabled
 superfactory.machine.super_proxy_factory.param.lock=Recipe Lock Toggle
@@ -48,11 +48,13 @@ superfactory.machine.super_proxy_factory.cache.cleared_no_usable_map=Cache clear
 superfactory.machine.super_proxy_factory.cache.cached_prefix=Cached
 superfactory.machine.super_proxy_factory.cache.cached_suffix=recipe mode(s) from
 
-superfactory.machine.super_proxy_factory.tooltip.type=Universal Proxy
-superfactory.machine.super_proxy_factory.tooltip.1=Caches multiblock recipe maps and proxies them through a TecTech-style controller.
-superfactory.machine.super_proxy_factory.tooltip.2=Only GregTech multiblock machine controllers are recognized by manual recipe update.
-superfactory.machine.super_proxy_factory.tooltip.3=Right-click with a screwdriver to cycle cached recipe modes on this controller only.
-superfactory.machine.super_proxy_factory.tooltip.4=Maintenance is internally disabled to avoid inherited maintenance penalties.
+superfactory.machine.super_proxy_factory.tooltip.type=Recipe Proxy Controller
+superfactory.machine.super_proxy_factory.tooltip.1=Runs recipes from a cached multiblock controller without building the original machine.
+superfactory.machine.super_proxy_factory.tooltip.2=Place a GregTech multiblock controller in the host slot, then update recipes from the GUI.
+superfactory.machine.super_proxy_factory.tooltip.3=Use a screwdriver to cycle cached recipe modes for this controller instance.
+superfactory.machine.super_proxy_factory.tooltip.4=Supports normal recipe proxying and supported special recipes such as recycler and Eye of Harmony.
+superfactory.machine.super_proxy_factory.tooltip.5=ME input buses and hatches may provide materials; Eye of Harmony fluids must come from ME storage input hatches.
+superfactory.machine.super_proxy_factory.tooltip.6=Wireless mode consumes energy from the wireless network; wired mode behaves like a normal multiblock recipe.
 superfactory.machine.super_proxy_factory.tooltip.controller=Front center
 superfactory.machine.super_proxy_factory.tooltip.any_casing=Any casing
 superfactory.machine.super_proxy_factory.param.power_display_mode=Power Display Mode
@@ -73,7 +75,7 @@ superfactory.machine.super_proxy_factory.gui.folded_suffix=entries folded
 superfactory.machine.super_proxy_factory.param.wireless_mode=Wireless Mode
 superfactory.machine.super_proxy_factory.param.manual_overclocks=Manual Overclocks
 
-superfactory.machine.super_integrated_factory.name=Super Integrated Factory
+superfactory.machine.super_integrated_factory.name=Process Integration Core
 
 superfactory.machine.super_integrated_factory.param.parallel=Global Parallel Multiplier
 superfactory.machine.super_integrated_factory.param.wireless_mode=Wireless Mode
@@ -104,9 +106,13 @@ superfactory.machine.super_integrated_factory.chat.output_stored_first=Output st
 superfactory.machine.super_integrated_factory.gui.tooltip.check_structure=Validate the multiblock structure immediately
 superfactory.machine.super_integrated_factory.gui.tooltip.process_management=Process management
 
-superfactory.machine.super_integrated_factory.tooltip.type=Universal Integrated Factory
-superfactory.machine.super_integrated_factory.tooltip.1=Initial shell for a generic process-packaging factory.
-superfactory.machine.super_integrated_factory.tooltip.2=Recipe execution is intentionally not implemented yet.
+superfactory.machine.super_integrated_factory.tooltip.type=Process Graph Controller
+superfactory.machine.super_integrated_factory.tooltip.1=Packages a connected process graph and runs its nodes inside one multiblock controller.
+superfactory.machine.super_integrated_factory.tooltip.2=Open process management, add recipe nodes, connect them, balance the graph, then submit.
+superfactory.machine.super_integrated_factory.tooltip.3=Provide startup materials and recipe hosts through input hatches and buses; outputs are collected normally.
+superfactory.machine.super_integrated_factory.tooltip.4=Each node keeps its own recipe, parallel count, and overclock setting; global parameters apply to the whole graph.
+superfactory.machine.super_integrated_factory.tooltip.5=Power loss stops active nodes immediately and does not refund already consumed startup materials.
+superfactory.machine.super_integrated_factory.tooltip.6=ME input buses and hatches are supported for graph inputs, including stored fluid requirements.
 superfactory.machine.super_integrated_factory.tooltip.controller=Front center
 superfactory.machine.super_integrated_factory.tooltip.any_casing=Any casing
 

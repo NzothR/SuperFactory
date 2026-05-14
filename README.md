@@ -1,68 +1,142 @@
 # SuperFactory
 
-SuperFactory is a GTNH addon focused on compact, generic, late-game factory multiblocks.
+SuperFactory 是一个面向 GT New Horizons 后期自动化的 GregTech 附属模组。
 
-## English
+模组目前提供两台紧凑型通用多方块机器：
 
-### Super Proxy Factory
+- 配方代理中枢
+- 工序集成核心
 
-Super Proxy Factory is the first implemented machine. It reads a GregTech multiblock controller from its controller slot,
-discovers the recipe maps exposed by that machine, and runs matching recipes through its own input and output hatches.
+它们的目标不是替代 GTNH 的发展路线，而是在玩家已经拥有大量成熟机器、AE 网络和复杂工序之后，减少重复搭建、重复维护和复杂产线堆叠带来的负担。
 
-Its recipe execution is planned in a separate runtime layer. The machine builds an execution plan from the selected recipe
-map, available inputs, machine parallel limit, power limit, batch settings, and optional output/runtime transforms.
+英文说明见 [README_EN.md](README_EN.md)。
 
-Structure:
+## 机器概览
 
-- 3x3x3 compact hollow cube.
-- Uses GregTech casing 2 meta 0.
-- Controller is placed on the front center.
-- The center block behind the controller is air.
-- At least 7 valid casing blocks are required.
-- Input buses, input hatches, output buses, output hatches, maintenance hatches, and energy or exotic energy hatches can
-  replace casing positions.
+### 配方代理中枢
 
-Main behavior:
+配方代理中枢用于代理执行其他 GregTech 多方块机器的配方。
 
-- Caches recipe maps from GregTech multiblock controllers.
-- Supports mode switching when the cached controller exposes multiple recipe maps.
-- Uses controller stack size as the parallel limit source.
-- Supports input separation, configured circuits, dual input hatches, recipe lock, batch expansion, perfect overclocking,
-  wireless energy reservation, output multipliers, output range clamps, and runtime clamps.
-- Recycler recipes have a custom high-parallel output path.
+玩家将一个 GregTech 多方块主机控制器放入机器的主机槽，然后在 GUI 中更新配方缓存。机器会读取该主机暴露出的配方模式，并使用配方代理中枢自己的输入舱室、输出舱室和能源系统执行对应配方。
 
-Current status:
+适合用于：
 
-Super Proxy Factory compiles and is ready for in-game testing. The main remaining work is validation across GTNH's wider
-machine ecosystem, especially machines with unusual recipe maps, special inputs, or modded hatch behavior.
+- 将已经解锁的多方块机器压缩为一个通用代理控制器。
+- 对同类配方进行高并行处理。
+- 通过同一台机器切换不同配方模式。
+- 代理部分特殊配方，例如回收机与鸿蒙之眼。
 
-## 中文
+主要特性：
 
-### 超级代理工厂
+- 支持普通输入总线、输入仓、ME 输入总线和 ME 输入仓。
+- 支持普通输出总线、输出仓和常见 ME 输出路径。
+- 支持配方锁定、批处理、输入隔离、手动超频和无线模式。
+- 成功执行过的配方会进入本机缓存，降低大量配方表扫描带来的运行开销。
+- 有线模式按常规多方块配方行为耗电；无线模式从无线电网扣能。
 
-超级代理工厂是目前已经实现的第一台机器。它会从主机槽读取 GregTech 多方块控制器，识别该机器暴露出的
-RecipeMap，并使用自己的输入仓、输出仓来代理执行对应配方。
+鸿蒙之眼兼容说明：
 
-它的配方执行被拆到了独立的运行计划层。机器会根据当前配方模式、可用输入、并行上限、功率上限、批处理设置
-以及可选的输出/耗时变换生成执行计划。
+- 鸿蒙之眼使用独立适配逻辑，不依赖普通 GTRecipe 字段表达全部输入输出。
+- 鸿蒙之眼的氢和氦仅支持通过存储输入仓（ME）供给。
+- 普通流体输入仓和四重输入仓不作为鸿蒙之眼氢氦供给路径。
+- 鸿蒙之眼只应用手动超频，并带有超频保护，避免无意义的额外耗能。
 
-结构：
+### 工序集成核心
 
-- 3x3x3 紧凑空心立方体。
-- 使用 GregTech casing 2 meta 0。
+工序集成核心用于封装并调度一整张工序图。
+
+玩家可以在工序管理界面中添加配方节点、连接节点、设置节点并行与节点超频，然后对整张工序图进行自动配平并提交。机器运行时会根据图结构调度节点，处理节点之间的中间产物、启动原料、不可消耗物品和主机配方需求。
+
+适合用于：
+
+- 将一条复杂产线封装进单个多方块控制器。
+- 管理多步骤、多中间产物、多节点并行的配方图。
+- 减少大型 AE 产线中中间产物回流与机器堆叠数量。
+- 对固定产品进行长期稳定生产。
+
+主要特性：
+
+- 图形化工序管理界面。
+- 支持普通配方节点、回收节点和已兼容的特殊配方节点。
+- 支持节点并行、节点超频和全局额外超频。
+- 支持自动连线、自动配平、导入导出和原材料导出。
+- 支持 ME 输入总线与 ME 输入仓提供工序输入，包括存储流体需求。
+- 机器断电后会立刻停止正在运行的节点，已经消耗的启动原料不会返还。
+
+## 基本使用方法
+
+### 配方代理中枢
+
+1. 搭建配方代理中枢多方块结构。
+2. 将要代理的 GregTech 多方块主机控制器放入主机槽。
+3. 点击 GUI 中的更新配方按钮，让机器扫描并缓存可用配方模式。
+4. 如果目标主机有多个配方模式，使用螺丝刀右键机器切换模式。
+5. 放入输入物品和流体，提供能源，机器会尝试执行当前缓存模式下的匹配配方。
+6. 如需固定某个配方，可以开启配方锁定。
+
+注意事项：
+
+- 手动更新配方时，仅识别 GregTech 多方块主机控制器。
+- 主机槽中的控制器堆叠数量会影响可用并行上限。
+- 无线模式不会自动超频，只使用手动超频；普通配方在有线模式下可使用自动超频。
+- 如果手动超频超过配方达到 1 tick 所需的完美超频次数，机器会自动缩小到有效上限。
+
+### 工序集成核心
+
+1. 搭建工序集成核心多方块结构。
+2. 打开工序管理界面。
+3. 添加配方节点或特殊节点。
+4. 为每个节点选择配方、输入、输出、不可消耗物品和主机配方需求。
+5. 连接节点，或使用自动连线。
+6. 使用自动配平，检查各节点速率关系。
+7. 提交工序。
+8. 向机器提供启动原料、不可消耗物品、主机配方和能源。
+9. 机器进入运行模式后会按工序图调度节点。
+
+注意事项：
+
+- 节点内超频与机器 GUI 中的全局额外超频会共同影响节点运行。
+- 超频带有保护，超过 1 tick 所需的多余超频不会继续应用。
+- 关闭电源会立即停止节点运行，不会等待当前节点完成。
+- 已经被节点消耗的启动原料不会因断电返还。
+
+## 多方块结构
+
+两台机器目前都使用紧凑的 3x3x3 空心结构。
+
+通用要求：
+
 - 控制器位于正面中心。
 - 控制器后方中心为空气。
-- 至少需要 7 个有效机械方块。
-- 输入总线、输入仓、输出总线、输出仓、维护仓、能源仓或异种能源仓可以替换机械方块位置。
+- 其余位置使用指定 GregTech 机械方块。
+- 输入总线、输入仓、输出总线、输出仓和能源仓等舱室可以替换部分机械方块位置。
 
-主要行为：
+更详细的结构与内部设计见 `docs` 目录。
 
-- 缓存 GregTech 多方块控制器的配方模式。
-- 当目标控制器暴露多个 RecipeMap 时，支持切换当前模式。
-- 通过主机槽里的控制器堆叠数量决定并行上限。
-- 支持输入隔离、编程电路匹配、双输入仓、配方锁、批处理扩展、完美超频、无线能量预扣、输出倍率、输出范围限制和运行时间限制。
-- 回收机配方有单独的高并行输出路径。
+## 配方与配置
 
-当前状态：
+两台机器都使用组装机配方。
 
-超级代理工厂已经可以编译，接下来主要需要在游戏内测试。重点是验证 GTNH 中各种特殊机器、特殊输入和模组仓口行为。
+默认配方定位在 UXV 阶段，适合在鸿蒙之眼之前制作。模组同时提供可选的 LV 便宜测试配方，默认关闭。
+
+常用配置项：
+
+- `enableSuperProxyFactory`：是否注册配方代理中枢。
+- `enableSuperIntegratedFactory`：是否注册工序集成核心。
+- `enableCheapSuperProxyFactoryRecipe`：是否启用配方代理中枢的 LV 便宜配方。
+- `enableCheapSuperIntegratedFactoryRecipe`：是否启用工序集成核心的 LV 便宜配方。
+- `superProxyFactorySuccessfulRecipeCacheSize`：每台配方代理中枢缓存成功配方的数量，默认为 64，设为 0 可关闭。
+
+配置文件位于 Minecraft 配置目录下的 `superfactory/superfactory.cfg`。
+
+## 文档
+
+更多设计细节可以查看：
+
+- `docs/GTNH代理工厂详细设计文档_修订版.md`
+- `docs/GTNH工序图模型与速率配平算法设计.md`
+- `docs/GTNH工序机器详细设计文档.md`
+
+## 状态
+
+模组仍处于面向 GTNH 实际存档测试的开发阶段。核心功能已经可用，但 GTNH 的机器生态非常庞大，部分特殊机器、特殊仓口或模组兼容路径仍可能需要针对性适配。

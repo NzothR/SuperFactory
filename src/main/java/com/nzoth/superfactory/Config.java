@@ -10,9 +10,12 @@ public class Config {
     public static int mteIdOffset = 18000;
     public static boolean enableSuperProxyFactory = true;
     public static boolean enableSuperIntegratedFactory = true;
+    public static boolean enableCheapSuperProxyFactoryRecipe = false;
+    public static boolean enableCheapSuperIntegratedFactoryRecipe = false;
     public static boolean enableOutputMultiplierAdjustment = false;
     public static boolean enableRuntimeAdjustment = false;
     public static boolean enableOutputRangeAdjustment = false;
+    public static int superProxyFactorySuccessfulRecipeCacheSize = 64;
     private static File boundConfigFile;
 
     public static void synchronizeConfiguration(File configFile) {
@@ -41,6 +44,16 @@ public class Config {
             Configuration.CATEGORY_GENERAL,
             enableSuperIntegratedFactory,
             "Whether the Super Integrated Factory controller should be registered.");
+        enableCheapSuperProxyFactoryRecipe = configuration.getBoolean(
+            "enableCheapSuperProxyFactoryRecipe",
+            Configuration.CATEGORY_GENERAL,
+            enableCheapSuperProxyFactoryRecipe,
+            "Enable an optional cheap LV assembler recipe for the Super Proxy Factory controller.");
+        enableCheapSuperIntegratedFactoryRecipe = configuration.getBoolean(
+            "enableCheapSuperIntegratedFactoryRecipe",
+            Configuration.CATEGORY_GENERAL,
+            enableCheapSuperIntegratedFactoryRecipe,
+            "Enable an optional cheap LV assembler recipe for the Super Integrated Factory controller.");
         enableOutputMultiplierAdjustment = configuration.getBoolean(
             "enableOutputMultiplierAdjustment",
             Configuration.CATEGORY_GENERAL,
@@ -56,6 +69,13 @@ public class Config {
             Configuration.CATEGORY_GENERAL,
             enableOutputRangeAdjustment,
             "Enable minimum/maximum item/fluid output parameters.");
+        superProxyFactorySuccessfulRecipeCacheSize = configuration.getInt(
+            "superProxyFactorySuccessfulRecipeCacheSize",
+            Configuration.CATEGORY_GENERAL,
+            superProxyFactorySuccessfulRecipeCacheSize,
+            0,
+            1024,
+            "Maximum number of recently successful recipes cached per Super Proxy Factory. Set to 0 to disable.");
 
         if (configuration.hasChanged()) {
             configuration.save();

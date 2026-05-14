@@ -76,13 +76,30 @@ public final class ProxyRecipeInputHandler {
 
     public static int computeInputBoundParallel(GTRecipe recipe, int maxParallel, ItemStack[] itemInputs,
         FluidStack[] fluidInputs) {
+        return computeInputBoundParallel(
+            recipe,
+            maxParallel,
+            itemInputs,
+            fluidInputs,
+            ProxyRecipeEffectiveValues.itemInputs(recipe),
+            ProxyRecipeEffectiveValues.fluidInputs(recipe));
+    }
+
+    public static int computeInputBoundParallel(GTRecipe recipe, int maxParallel, ItemStack[] itemInputs,
+        FluidStack[] fluidInputs, ItemStack[] effectiveItemInputs, FluidStack[] effectiveFluidInputs) {
         if (recipe == null || maxParallel <= 0) {
             return 0;
         }
-        if (!matchesRecipeInputs(recipe, itemInputs, fluidInputs)) {
+        if (!matchesRecipeInputs(recipe, itemInputs, fluidInputs, effectiveItemInputs, effectiveFluidInputs)) {
             return 0;
         }
-        return computeConsumableInputBoundParallel(recipe, maxParallel, itemInputs, fluidInputs);
+        return computeConsumableInputBoundParallel(
+            recipe,
+            maxParallel,
+            itemInputs,
+            fluidInputs,
+            effectiveItemInputs,
+            effectiveFluidInputs);
     }
 
     /**
@@ -94,14 +111,25 @@ public final class ProxyRecipeInputHandler {
      */
     public static int computeConsumableInputBoundParallel(GTRecipe recipe, int maxParallel, ItemStack[] itemInputs,
         FluidStack[] fluidInputs) {
+        return computeConsumableInputBoundParallel(
+            recipe,
+            maxParallel,
+            itemInputs,
+            fluidInputs,
+            ProxyRecipeEffectiveValues.itemInputs(recipe),
+            ProxyRecipeEffectiveValues.fluidInputs(recipe));
+    }
+
+    public static int computeConsumableInputBoundParallel(GTRecipe recipe, int maxParallel, ItemStack[] itemInputs,
+        FluidStack[] fluidInputs, ItemStack[] effectiveItemInputs, FluidStack[] effectiveFluidInputs) {
         if (recipe == null || maxParallel <= 0) {
             return 0;
         }
-        if (!hasConsumableInputs(recipe)) {
+        if (!hasConsumableInputs(effectiveItemInputs, effectiveFluidInputs)) {
             return maxParallel;
         }
-        long itemBound = computeItemParallelBound(recipe, itemInputs);
-        long fluidBound = computeFluidParallelBound(recipe, fluidInputs);
+        long itemBound = computeItemParallelBound(recipe, itemInputs, effectiveItemInputs);
+        long fluidBound = computeFluidParallelBound(fluidInputs, effectiveFluidInputs);
         long inputBound = Math.min(itemBound, fluidBound);
         if (inputBound <= 0L) {
             return 0;
@@ -110,27 +138,45 @@ public final class ProxyRecipeInputHandler {
     }
 
     public static boolean matchesRecipeInputs(GTRecipe recipe, ItemStack[] itemInputs, FluidStack[] fluidInputs) {
+        return matchesRecipeInputs(
+            recipe,
+            itemInputs,
+            fluidInputs,
+            ProxyRecipeEffectiveValues.itemInputs(recipe),
+            ProxyRecipeEffectiveValues.fluidInputs(recipe));
+    }
+
+    public static boolean matchesRecipeInputs(GTRecipe recipe, ItemStack[] itemInputs, FluidStack[] fluidInputs,
+        ItemStack[] effectiveItemInputs, FluidStack[] effectiveFluidInputs) {
         if (recipe == null) {
             return false;
         }
         ItemStack[] safeItems = itemInputs == null ? GTValues.emptyItemStackArray : itemInputs;
         FluidStack[] safeFluids = fluidInputs == null ? GTValues.emptyFluidStackArray : fluidInputs;
-        return recipe.isRecipeInputEqual(false, true, 1, safeFluids, safeItems);
+        if (!ProxyRecipeEffectiveValues.isEyeOfHarmony(recipe)) {
+            return recipe.isRecipeInputEqual(false, true, 1, safeFluids, safeItems);
+        }
+        return matchesNonConsumableItemMarkers(recipe, safeItems)
+            && canSatisfyItemDemands(buildItemDemands(recipe, effectiveItemInputs), recipe, safeItems)
+            && canSatisfyFluidDemands(buildFluidDemands(effectiveFluidInputs), safeFluids);
     }
 
     public static boolean hasConsumableInputs(GTRecipe recipe) {
-        if (recipe == null) {
-            return false;
-        }
-        if (recipe.mInputs != null) {
-            for (ItemStack input : recipe.mInputs) {
+        return hasConsumableInputs(
+            ProxyRecipeEffectiveValues.itemInputs(recipe),
+            ProxyRecipeEffectiveValues.fluidInputs(recipe));
+    }
+
+    public static boolean hasConsumableInputs(ItemStack[] effectiveItemInputs, FluidStack[] effectiveFluidInputs) {
+        if (effectiveItemInputs != null) {
+            for (ItemStack input : effectiveItemInputs) {
                 if (input != null && input.stackSize > 0 && !isNonConsumableMarker(input)) {
                     return true;
                 }
             }
         }
-        if (recipe.mFluidInputs != null) {
-            for (FluidStack input : recipe.mFluidInputs) {
+        if (effectiveFluidInputs != null) {
+            for (FluidStack input : effectiveFluidInputs) {
                 if (input != null && input.amount > 0) {
                     return true;
                 }
@@ -140,8 +186,17 @@ public final class ProxyRecipeInputHandler {
     }
 
     public static ProxyRecipeConsumptionPlan buildConsumptionPlan(GTRecipe recipe, int parallel) {
+        return buildConsumptionPlan(
+            recipe,
+            parallel,
+            ProxyRecipeEffectiveValues.itemInputs(recipe),
+            ProxyRecipeEffectiveValues.fluidInputs(recipe));
+    }
+
+    public static ProxyRecipeConsumptionPlan buildConsumptionPlan(GTRecipe recipe, int parallel,
+        ItemStack[] effectiveItemInputs, FluidStack[] effectiveFluidInputs) {
         ArrayList<ProxyRecipeConsumptionPlan.ItemDemand> itemDemands = new ArrayList<>();
-        for (ItemDemand demand : buildItemDemands(recipe)) {
+        for (ItemDemand demand : buildItemDemands(recipe, effectiveItemInputs)) {
             long amount = safeMultiply(demand.amountPerCraft, parallel);
             if (amount > 0L) {
                 itemDemands
@@ -150,7 +205,7 @@ public final class ProxyRecipeInputHandler {
         }
 
         ArrayList<ProxyRecipeConsumptionPlan.FluidDemand> fluidDemands = new ArrayList<>();
-        for (FluidDemand demand : buildFluidDemands(recipe)) {
+        for (FluidDemand demand : buildFluidDemands(effectiveFluidInputs)) {
             long amount = safeMultiply(demand.amountPerCraft, parallel);
             if (amount > 0L) {
                 fluidDemands.add(new ProxyRecipeConsumptionPlan.FluidDemand(demand.template.copy(), amount));
@@ -215,7 +270,12 @@ public final class ProxyRecipeInputHandler {
     }
 
     public static long computeItemParallelBound(GTRecipe recipe, ItemStack[] itemInputs) {
-        List<ItemDemand> demands = buildItemDemands(recipe);
+        return computeItemParallelBound(recipe, itemInputs, ProxyRecipeEffectiveValues.itemInputs(recipe));
+    }
+
+    public static long computeItemParallelBound(GTRecipe recipe, ItemStack[] itemInputs,
+        ItemStack[] effectiveItemInputs) {
+        List<ItemDemand> demands = buildItemDemands(recipe, effectiveItemInputs);
         if (demands.isEmpty()) {
             return Long.MAX_VALUE;
         }
@@ -243,7 +303,11 @@ public final class ProxyRecipeInputHandler {
     }
 
     public static long computeFluidParallelBound(GTRecipe recipe, FluidStack[] fluidInputs) {
-        List<FluidDemand> demands = buildFluidDemands(recipe);
+        return computeFluidParallelBound(fluidInputs, ProxyRecipeEffectiveValues.fluidInputs(recipe));
+    }
+
+    public static long computeFluidParallelBound(FluidStack[] fluidInputs, FluidStack[] effectiveFluidInputs) {
+        List<FluidDemand> demands = buildFluidDemands(effectiveFluidInputs);
         if (demands.isEmpty()) {
             return Long.MAX_VALUE;
         }
@@ -343,14 +407,38 @@ public final class ProxyRecipeInputHandler {
 
     private static ProxyRecipeInputGroup createGroup(byte color, List<ItemStack> liveItems,
         List<FluidStack> liveFluids) {
-        ItemStack[] liveItemArray = normalizeLiveItemRefs(liveItems);
+        InputItemView itemView = buildInputItemView(liveItems);
+        ItemStack[] liveItemArray = normalizeLiveItemRefs(itemView.liveItems);
         FluidStack[] liveFluidArray = normalizeLiveFluidRefs(liveFluids);
         return new ProxyRecipeInputGroup(
             color,
             liveItemArray,
             liveFluidArray,
-            buildQueryItems(liveItemArray),
+            buildQueryItems(liveItemArray, itemView.queryOnlyItems),
             buildQueryFluids(liveFluidArray));
+    }
+
+    private static InputItemView buildInputItemView(List<ItemStack> items) {
+        ArrayList<ItemStack> liveItems = new ArrayList<>();
+        ArrayList<ItemStack> queryOnlyItems = new ArrayList<>();
+        if (items == null) {
+            return new InputItemView(liveItems, queryOnlyItems);
+        }
+        for (ItemStack stack : items) {
+            if (stack == null) {
+                continue;
+            }
+            if (stack.stackSize > 0) {
+                liveItems.add(stack);
+                continue;
+            }
+            ItemStack marker = GTUtility.copyOrNull(stack);
+            if (marker != null) {
+                marker.stackSize = 1;
+                queryOnlyItems.add(marker);
+            }
+        }
+        return new InputItemView(liveItems, queryOnlyItems);
     }
 
     private static List<ItemStack> collectLiveItemInputs(List<MTEHatchInputBus> inputBusses, boolean doColorChecking,
@@ -391,7 +479,7 @@ public final class ProxyRecipeInputHandler {
                 continue;
             }
             ItemStack stored = bus.getStackInSlot(i);
-            if (stored != null && stored.stackSize > 0) {
+            if (stored != null) {
                 liveItems.add(stored);
             }
         }
@@ -507,12 +595,91 @@ public final class ProxyRecipeInputHandler {
         return GTOreDictUnificator.isInputStackEqual(available, required);
     }
 
-    private static List<ItemDemand> buildItemDemands(GTRecipe recipe) {
-        ArrayList<ItemDemand> demands = new ArrayList<>();
-        if (recipe.mInputs == null) {
-            return demands;
+    private static boolean canSatisfyItemDemands(List<ItemDemand> demands, GTRecipe recipe, ItemStack[] itemInputs) {
+        if (demands.isEmpty()) {
+            return true;
+        }
+        long[] availableCounts = new long[demands.size()];
+        for (ItemStack available : itemInputs) {
+            if (available == null || available.stackSize <= 0) {
+                continue;
+            }
+            for (int i = 0; i < demands.size(); i++) {
+                if (matchesRecipeInput(recipe, demands.get(i).template, available)) {
+                    availableCounts[i] += available.stackSize;
+                    break;
+                }
+            }
+        }
+        for (int i = 0; i < demands.size(); i++) {
+            if (availableCounts[i] < demands.get(i).amountPerCraft) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean matchesNonConsumableItemMarkers(GTRecipe recipe, ItemStack[] itemInputs) {
+        if (recipe == null || recipe.mInputs == null) {
+            return true;
         }
         for (ItemStack required : recipe.mInputs) {
+            if (required == null || required.stackSize > 0) {
+                continue;
+            }
+            ItemStack marker = GTUtility.copyOrNull(required);
+            if (marker == null) {
+                continue;
+            }
+            marker.stackSize = 1;
+            boolean found = false;
+            for (ItemStack available : itemInputs) {
+                if (available != null && GTUtility.areStacksEqual(marker, available, false)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean canSatisfyFluidDemands(List<FluidDemand> demands, FluidStack[] fluidInputs) {
+        if (demands.isEmpty()) {
+            return true;
+        }
+        long[] availableCounts = new long[demands.size()];
+        for (FluidStack available : fluidInputs) {
+            if (available == null || available.amount <= 0) {
+                continue;
+            }
+            for (int i = 0; i < demands.size(); i++) {
+                if (GTUtility.areFluidsEqual(available, demands.get(i).template)) {
+                    availableCounts[i] += available.amount;
+                    break;
+                }
+            }
+        }
+        for (int i = 0; i < demands.size(); i++) {
+            if (availableCounts[i] < demands.get(i).amountPerCraft) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static List<ItemDemand> buildItemDemands(GTRecipe recipe) {
+        return buildItemDemands(recipe, ProxyRecipeEffectiveValues.itemInputs(recipe));
+    }
+
+    private static List<ItemDemand> buildItemDemands(GTRecipe recipe, ItemStack[] effectiveItemInputs) {
+        ArrayList<ItemDemand> demands = new ArrayList<>();
+        if (effectiveItemInputs == null) {
+            return demands;
+        }
+        for (ItemStack required : effectiveItemInputs) {
             if (required == null || required.stackSize <= 0 || isNonConsumableMarker(required)) {
                 continue;
             }
@@ -544,11 +711,15 @@ public final class ProxyRecipeInputHandler {
     }
 
     private static List<FluidDemand> buildFluidDemands(GTRecipe recipe) {
+        return buildFluidDemands(ProxyRecipeEffectiveValues.fluidInputs(recipe));
+    }
+
+    private static List<FluidDemand> buildFluidDemands(FluidStack[] effectiveFluidInputs) {
         ArrayList<FluidDemand> demands = new ArrayList<>();
-        if (recipe.mFluidInputs == null) {
+        if (effectiveFluidInputs == null) {
             return demands;
         }
-        for (FluidStack required : recipe.mFluidInputs) {
+        for (FluidStack required : effectiveFluidInputs) {
             if (required == null || required.amount <= 0) {
                 continue;
             }
@@ -599,8 +770,12 @@ public final class ProxyRecipeInputHandler {
     }
 
     private static ItemStack[] buildQueryItems(ItemStack[] liveItemArray) {
+        return buildQueryItems(liveItemArray, Collections.emptyList());
+    }
+
+    private static ItemStack[] buildQueryItems(ItemStack[] liveItemArray, List<ItemStack> queryOnlyItems) {
         if (liveItemArray == null || liveItemArray.length == 0) {
-            return GTValues.emptyItemStackArray;
+            liveItemArray = GTValues.emptyItemStackArray;
         }
         ArrayList<ItemStack> merged = new ArrayList<>();
         for (ItemStack stack : liveItemArray) {
@@ -623,7 +798,26 @@ public final class ProxyRecipeInputHandler {
                 merged.add(copy);
             }
         }
+        if (queryOnlyItems != null) {
+            for (ItemStack marker : queryOnlyItems) {
+                addQueryMarker(merged, marker);
+            }
+        }
         return merged.isEmpty() ? GTValues.emptyItemStackArray : merged.toArray(new ItemStack[0]);
+    }
+
+    private static void addQueryMarker(ArrayList<ItemStack> merged, ItemStack marker) {
+        ItemStack copy = GTUtility.copyOrNull(marker);
+        if (copy == null) {
+            return;
+        }
+        copy.stackSize = Math.max(1, copy.stackSize);
+        for (ItemStack existing : merged) {
+            if (GTUtility.areStacksEqual(existing, copy, false)) {
+                return;
+            }
+        }
+        merged.add(copy);
     }
 
     private static FluidStack[] buildQueryFluids(FluidStack[] liveFluidArray) {
@@ -688,6 +882,17 @@ public final class ProxyRecipeInputHandler {
         private FluidDemand(FluidStack template, long amountPerCraft) {
             this.template = template;
             this.amountPerCraft = amountPerCraft;
+        }
+    }
+
+    private static final class InputItemView {
+
+        private final List<ItemStack> liveItems;
+        private final List<ItemStack> queryOnlyItems;
+
+        private InputItemView(List<ItemStack> liveItems, List<ItemStack> queryOnlyItems) {
+            this.liveItems = liveItems;
+            this.queryOnlyItems = queryOnlyItems;
         }
     }
 }

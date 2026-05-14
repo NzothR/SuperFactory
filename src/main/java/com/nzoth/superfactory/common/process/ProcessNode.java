@@ -19,15 +19,22 @@ public final class ProcessNode {
 
     public static final int WIDTH = 92;
     public static final int HEIGHT = 42;
-    public static final int INPUT_SLOTS = 180;
-    public static final int OUTPUT_SLOTS = 180;
+    public static final int SLOTS_PER_PAGE = 18;
+    public static final int PATTERN_PAGE_COUNT = 100;
+    public static final int INPUT_SLOTS = SLOTS_PER_PAGE * PATTERN_PAGE_COUNT;
+    public static final int OUTPUT_SLOTS = SLOTS_PER_PAGE * PATTERN_PAGE_COUNT;
     public static final int NON_CONSUMABLE_SLOTS = 9;
+    public static final String DISPLAY_AMOUNT_KEY = "SuperFactoryDisplayAmount";
+    public static final int TYPE_NORMAL = 0;
+    public static final int TYPE_RECYCLER = 1;
 
     public final int id;
     public int x;
     public int y;
     public boolean locked;
     public boolean endNode;
+    public int nodeType = TYPE_NORMAL;
+    public boolean recyclerOutputsScrapbox;
     public String name;
     public int durationTicks;
     public long euPerTick;
@@ -69,6 +76,8 @@ public final class ProcessNode {
         tag.setInteger("Y", y);
         tag.setBoolean("Locked", locked);
         tag.setBoolean("EndNode", endNode);
+        tag.setInteger("NodeType", nodeType);
+        tag.setBoolean("RecyclerOutputsScrapbox", recyclerOutputsScrapbox);
         tag.setString("Name", name == null ? "" : name);
         tag.setInteger("DurationTicks", durationTicks);
         tag.setLong("EUt", euPerTick);
@@ -83,10 +92,21 @@ public final class ProcessNode {
         tag.setString("RecipeFingerprint", recipeFingerprint == null ? "" : recipeFingerprint);
         tag.setString("EstimatedOutputLine", estimatedOutputLine == null ? "" : estimatedOutputLine);
         tag.setBoolean("LastRecipeCheckPassed", lastRecipeCheckPassed);
-        tag.setIntArray("OutputChances", outputChances);
+        NBTTagList outputChanceList = new NBTTagList();
+        for (int i = 0; i < outputChances.length; i++) {
+            if (outputChances[i] != 10000) {
+                NBTTagCompound chanceTag = new NBTTagCompound();
+                chanceTag.setInteger("Slot", i);
+                chanceTag.setInteger("Chance", outputChances[i]);
+                outputChanceList.appendTag(chanceTag);
+            }
+        }
+        tag.setTag("OutputChanceOverrides", outputChanceList);
         NBTTagList inputVariantList = new NBTTagList();
         for (int i = 0; i < inputVariants.length; i++) {
-            inputVariantList.appendTag(inputVariants[i].writeToNBT(i));
+            if (inputVariants[i].hasVariants()) {
+                inputVariantList.appendTag(inputVariants[i].writeToNBT(i));
+            }
         }
         tag.setTag("InputVariants", inputVariantList);
         tag.setTag("Machine", machineHandler.serializeNBT());
@@ -100,6 +120,8 @@ public final class ProcessNode {
         ProcessNode node = new ProcessNode(tag.getInteger("Id"), tag.getInteger("X"), tag.getInteger("Y"));
         node.locked = tag.getBoolean("Locked");
         node.endNode = tag.getBoolean("EndNode");
+        node.nodeType = tag.hasKey("NodeType") ? Math.max(TYPE_NORMAL, tag.getInteger("NodeType")) : TYPE_NORMAL;
+        node.recyclerOutputsScrapbox = tag.getBoolean("RecyclerOutputsScrapbox");
         node.name = tag.getString("Name");
         node.durationTicks = Math.max(0, tag.getInteger("DurationTicks"));
         node.euPerTick = Math.max(0L, tag.getLong("EUt"));
@@ -119,6 +141,16 @@ public final class ProcessNode {
             int[] chances = tag.getIntArray("OutputChances");
             for (int i = 0; i < node.outputChances.length && i < chances.length; i++) {
                 node.outputChances[i] = clampChance(chances[i]);
+            }
+        }
+        if (tag.hasKey("OutputChanceOverrides", Constants.NBT.TAG_LIST)) {
+            NBTTagList chanceList = tag.getTagList("OutputChanceOverrides", Constants.NBT.TAG_COMPOUND);
+            for (int i = 0; i < chanceList.tagCount(); i++) {
+                NBTTagCompound chanceTag = chanceList.getCompoundTagAt(i);
+                int slot = chanceTag.getInteger("Slot");
+                if (slot >= 0 && slot < node.outputChances.length) {
+                    node.outputChances[slot] = clampChance(chanceTag.getInteger("Chance"));
+                }
             }
         }
         if (tag.hasKey("Machine")) {
@@ -213,7 +245,11 @@ public final class ProcessNode {
     }
 
     public String buildRecipeFingerprint() {
-        return "t=" + durationTicks
+        return "type=" + nodeType
+            + ";scrapbox="
+            + recyclerOutputsScrapbox
+            + ";t="
+            + durationTicks
             + ";e="
             + euPerTick
             + ";i="
@@ -221,16 +257,30 @@ public final class ProcessNode {
             + ";o="
             + handlerFingerprint(outputHandler, null)
             + ";oc="
-            + java.util.Arrays.toString(outputChances)
+            + outputChanceFingerprint()
             + ";nc="
             + handlerFingerprint(nonConsumableHandler, null);
     }
 
+    private String outputChanceFingerprint() {
+        List<String> parts = new ArrayList<>();
+        for (int i = 0; i < outputHandler.getSlots() && i < outputChances.length; i++) {
+            if (outputHandler.getStackInSlot(i) != null && outputChances[i] != 10000) {
+                parts.add(i + ":" + outputChances[i]);
+            }
+        }
+        return parts.toString();
+    }
+
     private void markRecipeDirty() {
         if (!locked) {
-            lastRecipeCheckPassed = false;
+            lastRecipeCheckPassed = isRecyclerNode();
             estimatedOutputLine = "";
         }
+    }
+
+    public boolean isRecyclerNode() {
+        return nodeType == TYPE_RECYCLER;
     }
 
     private static String handlerFingerprint(ItemStackHandler handler, InputVariantState[] variants) {
@@ -253,10 +303,56 @@ public final class ProcessNode {
         FluidStack fluid = GTUtility.getFluidFromDisplayStack(stack);
         if (fluid != null && fluid.getFluid() != null) {
             return "fluid:" + fluid.getFluid()
-                .getName() + "@" + Math.max(1, fluid.amount);
+                .getName() + "@" + Math.max(1L, getDisplayAmount(stack));
         }
         String itemName = net.minecraft.item.Item.itemRegistry.getNameForObject(stack.getItem());
-        return "item:" + itemName + ":" + stack.getItemDamage() + "@" + Math.max(1, stack.stackSize);
+        return "item:" + itemName + ":" + stack.getItemDamage() + "@" + Math.max(1L, getDisplayAmount(stack));
+    }
+
+    public static long getDisplayAmount(ItemStack stack) {
+        if (stack == null) {
+            return 0L;
+        }
+        if (stack.hasTagCompound() && stack.getTagCompound()
+            .hasKey(DISPLAY_AMOUNT_KEY, Constants.NBT.TAG_LONG)) {
+            return Math.max(
+                0L,
+                stack.getTagCompound()
+                    .getLong(DISPLAY_AMOUNT_KEY));
+        }
+        FluidStack fluid = GTUtility.getFluidFromDisplayStack(stack);
+        if (fluid != null) {
+            return Math.max(0L, fluid.amount);
+        }
+        return Math.max(0L, stack.stackSize);
+    }
+
+    public static ItemStack withDisplayAmount(ItemStack stack, long amount) {
+        if (stack == null) {
+            return null;
+        }
+        ItemStack copy = stack.copy();
+        long clamped = Math.max(1L, amount);
+        FluidStack fluid = GTUtility.getFluidFromDisplayStack(copy);
+        if (fluid != null && fluid.getFluid() != null) {
+            fluid.amount = (int) Math.min(Integer.MAX_VALUE, clamped);
+            ItemStack display = GTUtility.getFluidDisplayStack(fluid, true);
+            copy = display == null ? copy : display;
+            copy.stackSize = 1;
+        } else {
+            copy.stackSize = (int) Math.min(Integer.MAX_VALUE, clamped);
+        }
+        if (clamped > Integer.MAX_VALUE || fluid != null) {
+            if (!copy.hasTagCompound()) {
+                copy.setTagCompound(new NBTTagCompound());
+            }
+            copy.getTagCompound()
+                .setLong(DISPLAY_AMOUNT_KEY, clamped);
+        } else if (copy.hasTagCompound()) {
+            copy.getTagCompound()
+                .removeTag(DISPLAY_AMOUNT_KEY);
+        }
+        return copy;
     }
 
     public static final class InputVariantState {

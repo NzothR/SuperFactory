@@ -23,10 +23,14 @@ import codechicken.nei.recipe.GuiRecipeButton;
 import codechicken.nei.recipe.RecipeCatalysts;
 import codechicken.nei.recipe.RecipeHandlerRef;
 import gregtech.api.enums.ItemList;
+import gregtech.api.enums.Materials;
 import gregtech.api.util.GTOreDictUnificator;
 import gregtech.api.util.GTRecipe;
 import gregtech.api.util.GTUtility;
 import gregtech.nei.GTNEIDefaultHandler;
+import tectech.recipe.EyeOfHarmonyRecipe;
+import tectech.util.FluidStackLong;
+import tectech.util.ItemStackLong;
 
 public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton {
 
@@ -83,7 +87,7 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
     }
 
     private static boolean isUnsupportedRecipeMapName(String recipeMapName) {
-        return "gt.recipe.eyeofharmony".equals(recipeMapName);
+        return false;
     }
 
     public static void updateRecipeButtons(GuiRecipe<?> guiRecipe, List<GuiRecipeButton> buttonList) {
@@ -102,12 +106,16 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         ItemStackHandler outputHandler = new ItemStackHandler(ProcessNode.OUTPUT_SLOTS);
         ItemStackHandler nonConsumableHandler = new ItemStackHandler(ProcessNode.NON_CONSUMABLE_SLOTS);
         fillConsumableInputsFromPositionedStacks(inputHandler, cached.mInputs, cached.mRecipe.mInputs);
-        fillHandlerWithFluids(inputHandler, cached.mRecipe.mFluidInputs);
-        fillHandler(outputHandler, cached.mRecipe.mOutputs);
-        fillHandlerWithFluids(outputHandler, cached.mRecipe.mFluidOutputs);
+        fillHandlerWithFluids(inputHandler, effectiveFluidInputs(cached.mRecipe));
+        ItemStack[] itemOutputs = effectiveItemOutputs(cached.mRecipe);
+        FluidStack[] fluidOutputs = effectiveFluidOutputs(cached.mRecipe);
+        fillHandler(outputHandler, itemOutputs);
+        fillHandlerWithFluids(outputHandler, fluidOutputs);
         fillNonConsumables(nonConsumableHandler, cached);
         NBTTagList inputVariants = buildInputVariantsTag(cached.mInputs, cached.mRecipe.mInputs);
-        int[] outputChances = buildOutputChances(outputHandler, cached.mRecipe);
+        int[] outputChances = buildOutputChances(outputHandler, cached.mRecipe, itemOutputs);
+        int duration = effectiveDuration(cached.mRecipe);
+        long euPerTick = effectiveEuPerTick(cached.mRecipe, duration);
 
         NBTTagCompound tag = new NBTTagCompound();
         tag.setTag("Inputs", inputHandler.serializeNBT());
@@ -115,8 +123,8 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         tag.setTag("Outputs", outputHandler.serializeNBT());
         tag.setIntArray("OutputChances", outputChances);
         tag.setTag("NonConsumables", nonConsumableHandler.serializeNBT());
-        tag.setInteger("DurationTicks", cached.mRecipe.mDuration);
-        tag.setLong("EUt", cached.mRecipe.mEUt);
+        tag.setInteger("DurationTicks", duration);
+        tag.setLong("EUt", euPerTick);
         tag.setString("RecipeHandlerName", handler.getRecipeName());
         tag.setString("RecipeMapName", handler.getRecipeMap().unlocalizedName);
         tag.setString(
@@ -127,8 +135,8 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
                 nonConsumableHandler,
                 outputChances,
                 inputVariants,
-                cached.mRecipe.mDuration,
-                cached.mRecipe.mEUt));
+                duration,
+                euPerTick));
 
         List<PositionedStack> catalysts = RecipeCatalysts.getRecipeCatalysts(handler);
         if (!catalysts.isEmpty() && catalysts.get(0).item != null) {
@@ -177,7 +185,8 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         int slot = firstEmptySlot(handler);
         for (ItemStack stack : stacks) {
             if (stack != null && stack.stackSize > 0 && slot < handler.getSlots()) {
-                handler.setStackInSlot(slot++, stack.copy());
+                handler
+                    .setStackInSlot(slot++, ProcessNode.withDisplayAmount(stack, ProcessNode.getDisplayAmount(stack)));
             }
         }
     }
@@ -191,10 +200,92 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             if (stack != null && stack.amount > 0 && slot < handler.getSlots()) {
                 ItemStack display = GTUtility.getFluidDisplayStack(stack, true);
                 if (display != null) {
-                    handler.setStackInSlot(slot++, display);
+                    handler.setStackInSlot(slot++, ProcessNode.withDisplayAmount(display, Math.max(1L, stack.amount)));
                 }
             }
         }
+    }
+
+    private static EyeOfHarmonyRecipe getEyeOfHarmonyRecipe(GTRecipe recipe) {
+        return recipe != null && recipe.mSpecialItems instanceof EyeOfHarmonyRecipe
+            ? (EyeOfHarmonyRecipe) recipe.mSpecialItems
+            : null;
+    }
+
+    private static ItemStack[] effectiveItemOutputs(GTRecipe recipe) {
+        EyeOfHarmonyRecipe eyeRecipe = getEyeOfHarmonyRecipe(recipe);
+        if (eyeRecipe == null) {
+            return recipe == null || recipe.mOutputs == null ? new ItemStack[0] : recipe.mOutputs;
+        }
+        List<ItemStack> outputs = new java.util.ArrayList<>();
+        for (ItemStackLong stackLong : eyeRecipe.getOutputItems()) {
+            if (stackLong != null && stackLong.itemStack != null && stackLong.stackSize > 0L) {
+                outputs.add(ProcessNode.withDisplayAmount(stackLong.itemStack, stackLong.stackSize));
+            }
+        }
+        return outputs.toArray(new ItemStack[0]);
+    }
+
+    private static FluidStack[] effectiveFluidOutputs(GTRecipe recipe) {
+        EyeOfHarmonyRecipe eyeRecipe = getEyeOfHarmonyRecipe(recipe);
+        if (eyeRecipe == null) {
+            return recipe == null || recipe.mFluidOutputs == null ? new FluidStack[0] : recipe.mFluidOutputs;
+        }
+        List<FluidStack> outputs = new java.util.ArrayList<>();
+        for (FluidStackLong stackLong : eyeRecipe.getOutputFluids()) {
+            if (stackLong != null && stackLong.fluidStack != null && stackLong.amount > 0L) {
+                FluidStack copy = stackLong.fluidStack.copy();
+                copy.amount = (int) Math.min(Integer.MAX_VALUE, stackLong.amount);
+                outputs.add(copy);
+            }
+        }
+        return outputs.toArray(new FluidStack[0]);
+    }
+
+    private static FluidStack[] effectiveFluidInputs(GTRecipe recipe) {
+        EyeOfHarmonyRecipe eyeRecipe = getEyeOfHarmonyRecipe(recipe);
+        if (eyeRecipe == null) {
+            return recipe == null || recipe.mFluidInputs == null ? new FluidStack[0] : recipe.mFluidInputs;
+        }
+        List<FluidStack> inputs = new java.util.ArrayList<>();
+        addEyeFluidInput(inputs, Materials.Hydrogen.getGas(1), eyeRecipe.getHydrogenRequirement());
+        addEyeFluidInput(inputs, Materials.Helium.getGas(1), eyeRecipe.getHeliumRequirement());
+        return inputs.toArray(new FluidStack[0]);
+    }
+
+    private static void addEyeFluidInput(List<FluidStack> inputs, FluidStack template, long amount) {
+        if (template == null || template.getFluid() == null || amount <= 0L) {
+            return;
+        }
+        FluidStack copy = template.copy();
+        copy.amount = (int) Math.min(Integer.MAX_VALUE, amount);
+        inputs.add(copy);
+    }
+
+    private static int effectiveDuration(GTRecipe recipe) {
+        EyeOfHarmonyRecipe eyeRecipe = getEyeOfHarmonyRecipe(recipe);
+        long duration = eyeRecipe == null ? recipe == null ? 0L : recipe.mDuration : eyeRecipe.getRecipeTimeInTicks();
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, duration));
+    }
+
+    private static long effectiveEuPerTick(GTRecipe recipe, int durationTicks) {
+        EyeOfHarmonyRecipe eyeRecipe = getEyeOfHarmonyRecipe(recipe);
+        if (eyeRecipe == null) {
+            return Math.max(0L, recipe == null ? 0L : recipe.mEUt);
+        }
+        long duration = Math.max(1L, durationTicks);
+        long total = effectiveEyeInputEu(eyeRecipe);
+        return total / duration + (total % duration == 0L ? 0L : 1L);
+    }
+
+    private static long effectiveEyeInputEu(EyeOfHarmonyRecipe eyeRecipe) {
+        long total = Math.max(0L, eyeRecipe.getEUStartCost());
+        double efficiency = eyeRecipe.getRecipeEnergyEfficiency();
+        if (efficiency > 0.0D) {
+            double fromOutput = Math.ceil(Math.max(0L, eyeRecipe.getEUOutput()) / efficiency);
+            total = Math.max(total, fromOutput >= Long.MAX_VALUE ? Long.MAX_VALUE : (long) fromOutput);
+        }
+        return total;
     }
 
     private static void fillNonConsumables(ItemStackHandler handler, GTNEIDefaultHandler.CachedDefaultRecipe cached) {
@@ -334,16 +425,16 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         return 0;
     }
 
-    private static int[] buildOutputChances(ItemStackHandler outputs, GTRecipe recipe) {
+    private static int[] buildOutputChances(ItemStackHandler outputs, GTRecipe recipe, ItemStack[] itemOutputs) {
         int[] chances = new int[ProcessNode.OUTPUT_SLOTS];
         java.util.Arrays.fill(chances, 10000);
-        if (recipe == null || recipe.mChances == null) {
+        if (getEyeOfHarmonyRecipe(recipe) != null || recipe == null || recipe.mChances == null) {
             return chances;
         }
         boolean[] usedSlots = new boolean[outputs.getSlots()];
-        for (int recipeOutput = 0; recipeOutput < recipe.mOutputs.length
+        for (int recipeOutput = 0; recipeOutput < itemOutputs.length
             && recipeOutput < recipe.mChances.length; recipeOutput++) {
-            ItemStack stack = recipe.mOutputs[recipeOutput];
+            ItemStack stack = itemOutputs[recipeOutput];
             if (stack == null) {
                 continue;
             }

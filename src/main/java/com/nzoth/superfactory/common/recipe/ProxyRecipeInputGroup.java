@@ -19,14 +19,29 @@ public final class ProxyRecipeInputGroup {
     /** Matching-only view passed to recipe search. */
     public final ItemStack[] queryItems;
     public final FluidStack[] queryFluids;
+    /**
+     * True when live arrays came from the machine's generic stored-input view.
+     *
+     * <p>
+     * Some GTNH hatches, especially ME-backed hatches, expose recipe-visible inputs through the multiblock helper API
+     * instead of ordinary slot references. These groups must be consumed through the owning machine rather than by
+     * mutating the live array entries directly.
+     */
+    public final boolean machineManaged;
 
     public ProxyRecipeInputGroup(byte color, ItemStack[] liveItems, FluidStack[] liveFluids, ItemStack[] queryItems,
         FluidStack[] queryFluids) {
+        this(color, liveItems, liveFluids, queryItems, queryFluids, false);
+    }
+
+    public ProxyRecipeInputGroup(byte color, ItemStack[] liveItems, FluidStack[] liveFluids, ItemStack[] queryItems,
+        FluidStack[] queryFluids, boolean machineManaged) {
         this.color = color;
         this.liveItems = liveItems;
         this.liveFluids = liveFluids;
         this.queryItems = queryItems;
         this.queryFluids = queryFluids;
+        this.machineManaged = machineManaged;
     }
 
     public boolean isEmpty() {

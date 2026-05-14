@@ -80,11 +80,11 @@ RecipeNode {
 其中：
 
 ```text
-duration = 当前 OC 状态下的实际耗时
-parallel = 当前节点并行数 P
+duration = 当前节点基础 OC 状态下的实际耗时
+parallel = 当前节点基础并行数 P
 ```
 
-配平算法只直接调整 `parallel`，不主动改变节点的 OC 状态。
+配平算法只直接调整 `parallel`，不主动改变节点的 OC 状态。机器运行时可以额外叠加机器级并行倍率和机器级额外 OC；这些参数不参与配平求解，也不会写回工序图节点。
 
 ---
 
@@ -477,10 +477,18 @@ produce_rate(v, m) = output_amount(v, m) * P_v / duration_v
 其中：
 
 ```text
-output_amount(v, m) = 节点 v 单次配方输出物料 m 的数量
+output_amount(v, m) = 节点 v 单次配方输出物料 m 的期望数量
 P_v = 节点 v 的并行数
 duration_v = 节点 v 当前 OC 后耗时
 ```
+
+对于概率产物，`output_amount` 使用期望值：
+
+```text
+expected_output_amount(v, m) = stack_amount(v, m) × chance(v, m) / 10000
+```
+
+其中 `chance` 使用 GT 配方内部概率单位，`10000` 表示 100%。配平、产物估计和节点编辑器速率显示使用期望值；实际运行结算仍按 GT 并行概率算法投掷产物。
 
 ---
 
@@ -563,6 +571,12 @@ P_i ∈ Integer
 ```
 
 这些由玩家或后续运行校验处理。
+
+运行时机器级并行倍率会整体放大节点有效并行上限，但它属于运行参数，不改变配平结果本身。换言之，配平得到的是工序图的基础 `P_i`，机器运行时使用：
+
+```text
+effectiveParallelLimit_i = P_i × machine.parallelMultiplier
+```
 
 ---
 
@@ -1465,6 +1479,38 @@ G = 2G/s
 副产物：
 D = 1L/s
 ```
+
+---
+
+## 24.5 回收节点的配平语义
+
+回收节点是特殊节点，不对应普通 GT 配方。它的输出只可能是废料或废料盒，输出概率固定为 12.5%。配平和产物估计中，回收节点的输出数量按期望值计算：
+
+```text
+scrap mode: output_amount = input_count / 8
+scrapbox mode: output_amount = floor(input_count / 9) / 8
+```
+
+回收节点自身不作为配平目标被主动优化；它的运行规模由直接上游提供给它的内部物料决定。换言之，回收节点可以为下游质量发生器等节点提供废料/废料盒产物流，但算法不应为了“配平回收节点”而修改回收节点的基础并行。配平方程中应把回收节点视为一个速率转换器：直接上游节点的期望产物流入回收节点后，按回收节点当前产出模式折算成废料/废料盒的期望产率，再用这个期望产率去约束下游节点。
+
+例如：
+
+```text
+A -> Recycler -> B
+
+A_output_rate = A_output_amount * P_A / duration_A
+Recycler_output_rate = A_output_rate / input_cost * 1/8
+B_input_rate = B_input_amount * P_B / duration_B
+
+约束：
+Recycler_output_rate = B_input_rate
+```
+
+其中 `input_cost` 在废料模式为 1，在废料盒模式为 9。若 A 的输出本身是概率产物，则 `A_output_amount` 使用概率期望值。
+
+回收节点的输入必须全部来自直接上游节点输出，不允许作为外部输入。该约束属于工序图合法性检查的一部分，确保回收链只处理图内副产物或中间产物。
+
+实际运行时，回收节点和普通概率输出节点都应使用批量概率结算，而不是逐物品掷骰。这样可以在 GTNH 后期 G/T/P 级物料量下保持性能稳定；GUI 估计则使用期望值。
 
 ---
 

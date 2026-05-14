@@ -17,6 +17,10 @@ public class Config {
 
     public static void synchronizeConfiguration(File configFile) {
         boundConfigFile = configFile;
+        File parent = configFile.getParentFile();
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs();
+        }
         Configuration configuration = new Configuration(configFile);
 
         greeting = configuration.getString("greeting", Configuration.CATEGORY_GENERAL, greeting, "How shall I greet?");

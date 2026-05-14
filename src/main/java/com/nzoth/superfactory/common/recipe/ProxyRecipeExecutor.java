@@ -29,7 +29,7 @@ public final class ProxyRecipeExecutor {
         int executionParallel = computeBatchedParallel(settings, overclock.duration);
         double batchMultiplier = settings.baseParallel > 0 ? (double) executionParallel / settings.baseParallel : 1.0D;
         int rawDuration = scaleIntCeil(overclock.duration, executionParallel, settings.baseParallel);
-        long rawEut = overclock.euPerTick;
+        long rawEut = overclock.inputEuPerTick;
         long transformedDuration = RuntimeTransform
             .clampFinalDuration(rawDuration, settings.minimumRuntime, settings.maximumRuntime);
         long transformedTotalEnergy = safeMultiply(rawEut, transformedDuration);
@@ -67,7 +67,7 @@ public final class ProxyRecipeExecutor {
     }
 
     public static long computePowerForPerfectOverclocks(GTRecipe recipe, int parallel, int overclocks) {
-        long recipeEut = Math.max(1L, Math.abs((long) recipe.mEUt));
+        long recipeEut = Math.max(1L, ProxyRecipeEffectiveValues.inputEuPerTick(recipe));
         long basePower = safeMultiply(recipeEut, parallel);
         long multiplier = 1L;
         for (int i = 0; i < overclocks; i++) {
@@ -77,20 +77,23 @@ public final class ProxyRecipeExecutor {
     }
 
     private static OverclockResult calculateOverclockedRecipe(Settings settings) {
+        long recipeInputEut = ProxyRecipeEffectiveValues.inputEuPerTick(settings.recipe);
+        int recipeDuration = ProxyRecipeEffectiveValues.duration(settings.recipe);
+        if (recipeInputEut <= 0L) {
+            return null;
+        }
         if (settings.manualOverclocks > 0) {
             return calculateManualOverclockedRecipe(settings);
         }
 
-        int maxOverclocks = computeOverclocksToOneTick(Math.max(1, settings.recipe.mDuration));
+        int maxOverclocks = computeOverclocksToOneTick(recipeDuration);
         if (settings.disableOverclocking) {
             maxOverclocks = 0;
         }
-        long availablePower = settings.wirelessMode
-            ? computePowerForPerfectOverclocks(settings.recipe, settings.baseParallel, maxOverclocks)
+        long availablePower = settings.disableOverclocking ? safeMultiply(recipeInputEut, settings.baseParallel)
             : Math.max(1L, settings.availablePower);
-        OverclockCalculator calculator = new OverclockCalculator()
-            .setRecipeEUt(Math.max(1L, Math.abs((long) settings.recipe.mEUt)))
-            .setDuration(Math.max(1, settings.recipe.mDuration))
+        OverclockCalculator calculator = new OverclockCalculator().setRecipeEUt(recipeInputEut)
+            .setDuration(recipeDuration)
             .setEUt(availablePower)
             .setAmperage(1)
             .enablePerfectOC()
@@ -121,12 +124,14 @@ public final class ProxyRecipeExecutor {
     }
 
     private static OverclockResult calculateManualOverclockedRecipe(Settings settings) {
-        int overclocks = Math.max(0, Math.min(64, settings.manualOverclocks));
+        int requestedOverclocks = Math.max(0, Math.min(64, settings.manualOverclocks));
+        int overclocks = Math
+            .min(requestedOverclocks, computeOverclocksToOneTick(ProxyRecipeEffectiveValues.duration(settings.recipe)));
         long euPerTick = computePowerForPerfectOverclocks(settings.recipe, settings.baseParallel, overclocks);
         if (!settings.wirelessMode && euPerTick > Math.max(1L, settings.availablePower)) {
             return null;
         }
-        int duration = Math.max(1, settings.recipe.mDuration);
+        int duration = ProxyRecipeEffectiveValues.duration(settings.recipe);
         for (int i = 0; i < overclocks; i++) {
             duration = Math.max(1, duration / 4);
         }
@@ -149,16 +154,18 @@ public final class ProxyRecipeExecutor {
     }
 
     public static ItemStack[] buildRawItemOutputs(GTRecipe recipe, int parallel) {
-        if (recipe.mOutputs == null || recipe.mOutputs.length == 0 || parallel <= 0) {
+        ItemStack[] itemOutputs = ProxyRecipeEffectiveValues.itemOutputs(recipe);
+        if (itemOutputs.length == 0 || parallel <= 0) {
             return null;
         }
+        int[] chances = ProxyRecipeEffectiveValues.itemOutputChances(recipe, itemOutputs.length);
         ArrayList<ItemStack> out = new ArrayList<>();
-        for (int i = 0; i < recipe.mOutputs.length; i++) {
-            ItemStack output = recipe.mOutputs[i];
+        for (int i = 0; i < itemOutputs.length; i++) {
+            ItemStack output = itemOutputs[i];
             if (output == null || output.stackSize <= 0) {
                 continue;
             }
-            int chance = recipe.mChances != null && i < recipe.mChances.length ? recipe.mChances[i] : 10000;
+            int chance = i < chances.length ? chances[i] : 10000;
             long multiplier = ParallelHelper.calculateIntegralChancedOutputMultiplier(chance, parallel);
             ParallelHelper.addItemsLong(out, output, (long) output.stackSize * multiplier);
         }
@@ -166,11 +173,12 @@ public final class ProxyRecipeExecutor {
     }
 
     public static FluidStack[] buildRawFluidOutputs(GTRecipe recipe, int parallel) {
-        if (recipe.mFluidOutputs == null || recipe.mFluidOutputs.length == 0 || parallel <= 0) {
+        FluidStack[] fluidOutputs = ProxyRecipeEffectiveValues.fluidOutputs(recipe);
+        if (fluidOutputs.length == 0 || parallel <= 0) {
             return null;
         }
         ArrayList<FluidStack> out = new ArrayList<>();
-        for (FluidStack output : recipe.mFluidOutputs) {
+        for (FluidStack output : fluidOutputs) {
             if (output == null || output.amount <= 0) {
                 continue;
             }
@@ -228,9 +236,9 @@ public final class ProxyRecipeExecutor {
         /** Final upper duration clamp. This is a cheat-like override and never affects power checks. */
         public long maximumRuntime;
         public boolean enableHeatOverclocking;
-        /** Used for marker-only recipes: they may parallelize, but automatic overclocking is disabled. */
+        /** Disables automatic overclocking. Manual overclocks still take priority when configured above zero. */
         public boolean disableOverclocking;
-        /** Exact perfect-overclock count. Zero keeps the automatic GT-style planner. */
+        /** Exact perfect-overclock count. Values above zero override the automatic GT-style planner. */
         public int manualOverclocks;
         public Function<ItemStack[], ItemStack[]> itemTransformer = outputs -> outputs;
         public Function<FluidStack[], FluidStack[]> fluidTransformer = outputs -> outputs;
@@ -239,12 +247,12 @@ public final class ProxyRecipeExecutor {
     private static final class OverclockResult {
 
         private final int duration;
-        private final long euPerTick;
+        private final long inputEuPerTick;
         private final int overclocks;
 
-        private OverclockResult(int duration, long euPerTick, int overclocks) {
+        private OverclockResult(int duration, long inputEuPerTick, int overclocks) {
             this.duration = duration;
-            this.euPerTick = euPerTick;
+            this.inputEuPerTick = inputEuPerTick;
             this.overclocks = overclocks;
         }
     }

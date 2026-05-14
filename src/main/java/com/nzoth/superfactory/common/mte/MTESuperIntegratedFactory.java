@@ -69,6 +69,10 @@ import com.nzoth.superfactory.common.process.ProcessEdge;
 import com.nzoth.superfactory.common.process.ProcessGraph;
 import com.nzoth.superfactory.common.process.ProcessNode;
 import com.nzoth.superfactory.common.process.ProcessRequirements;
+import com.nzoth.superfactory.common.process.runtime.BufferedFluidStack;
+import com.nzoth.superfactory.common.process.runtime.BufferedItemStack;
+import com.nzoth.superfactory.common.process.runtime.ProcessBufferUtil;
+import com.nzoth.superfactory.common.process.runtime.ProcessRuntimeMath;
 import com.nzoth.superfactory.common.ui.canvas.CanvasWidget;
 import com.nzoth.superfactory.common.ui.widget.RecipePatternSlotWidget;
 
@@ -118,6 +122,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     private static final int CASING_INDEX = GTUtility.getCasingTextureIndex(GregTechAPI.sBlockCasings2, CASING_META);
     private static final int PROCESS_WINDOW_WIDTH = 320;
     private static final int PROCESS_WINDOW_HEIGHT = 220;
+    private static final boolean RUNTIME_DEBUG_LOGGING = false;
     private static final int PROCESS_TOOLBAR_X = PROCESS_WINDOW_WIDTH - 24;
     private static final int PATTERN_VISIBLE_SLOTS = 12;
     private static final int ACTION_AMOUNT_APPLY = 5;
@@ -845,15 +850,8 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         if (stack == null) {
             return;
         }
-        int amount = Math.max(1, parseInt(value, getDisplayAmount(stack)));
-        if (stack.hasTagCompound() && stack.getTagCompound()
-            .hasKey("mFluidDisplayAmount")) {
-            stack.getTagCompound()
-                .setLong("mFluidDisplayAmount", amount);
-            stack.stackSize = 1;
-        } else {
-            stack.stackSize = amount;
-        }
+        long amount = Math.max(1L, parseLong(value, getDisplayAmount(stack)));
+        amountEditHandler.setStackInSlot(amountEditSlot, ProcessNode.withDisplayAmount(stack, amount));
     }
 
     private void clearAmountEditor() {
@@ -861,14 +859,8 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         amountEditSlot = -1;
     }
 
-    private int getDisplayAmount(ItemStack stack) {
-        if (stack.hasTagCompound() && stack.getTagCompound()
-            .hasKey("mFluidDisplayAmount")) {
-            long amount = stack.getTagCompound()
-                .getLong("mFluidDisplayAmount");
-            return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, amount));
-        }
-        return stack.stackSize;
+    private long getDisplayAmount(ItemStack stack) {
+        return ProcessNode.getDisplayAmount(stack);
     }
 
     private ItemStack getEditedStack() {
@@ -1639,9 +1631,23 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             + ";o="
             + handlerFingerprint(outputs)
             + ";oc="
-            + java.util.Arrays.toString(outputChances == null ? defaultOutputChances() : outputChances)
+            + outputChanceFingerprint(outputs, outputChances == null ? defaultOutputChances() : outputChances)
             + ";nc="
             + handlerFingerprint(nonConsumables);
+    }
+
+    private static String outputChanceFingerprint(com.gtnewhorizons.modularui.api.forge.ItemStackHandler outputs,
+        int[] outputChances) {
+        List<String> parts = new ArrayList<>();
+        if (outputs == null || outputChances == null) {
+            return parts.toString();
+        }
+        for (int i = 0; i < outputs.getSlots() && i < outputChances.length; i++) {
+            if (outputs.getStackInSlot(i) != null && outputChances[i] != 10000) {
+                parts.add(i + ":" + outputChances[i]);
+            }
+        }
+        return parts.toString();
     }
 
     public static String buildRecipeFingerprint(com.gtnewhorizons.modularui.api.forge.ItemStackHandler inputs,
@@ -1887,6 +1893,11 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private String getMachineModeLine() {
+        if (!getBaseMetaTileEntity().isAllowedToWork()) {
+            return tr("superfactory.machine.super_integrated_factory.gui.machine_mode") + ": "
+                + EnumChatFormatting.RED
+                + tr("superfactory.machine.super_integrated_factory.gui.power_disabled");
+        }
         return tr("superfactory.machine.super_integrated_factory.gui.machine_mode") + ": "
             + modeColor(factoryMode)
             + getModeDisplayName();
@@ -2056,6 +2067,9 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         }
         long tierVoltage = Math.max(1L, GTValues.V[tier]);
         long amperage = Math.max(1L, (euPerTick + tierVoltage - 1L) / tierVoltage);
+        if (amperage > 9999L) {
+            return String.format(java.util.Locale.ROOT, "%.2e EU/t", (double) euPerTick);
+        }
         return amperage + "A " + GTValues.VN[tier] + "/t" + EnumChatFormatting.GRAY + " (" + euPerTick + " EU/t)";
     }
 
@@ -2139,7 +2153,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
      * locked graph snapshot; the machine parameters do not mutate these jobs at runtime.
      */
     private void processRunningMode(long tick) {
-        boolean debugRuntime = tick - lastRuntimeDebugLogTick >= 20L;
+        boolean debugRuntime = RUNTIME_DEBUG_LOGGING && tick - lastRuntimeDebugLogTick >= 20L;
         if (!getBaseMetaTileEntity().isAllowedToWork()) {
             discardRunningJobsForPowerLoss();
             clearMachineWorkDisplay();
@@ -2159,14 +2173,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         runtimeOutputEstimateLines = buildActiveRuntimeOutputLines();
         if (debugRuntime) {
             lastRuntimeDebugLogTick = tick;
-            SuperFactory.LOG.info(
-                "[Super Integrated Factory/Runtime] tick={}, active={}, internalItems={}, internalFluids={}, outputItems={}, outputFluids={}",
-                tick,
-                runningJobs.size(),
-                describeBufferedItemList(internalItems),
-                describeBufferedFluidList(internalFluids),
-                describeBufferedItemList(outputItems),
-                describeBufferedFluidList(outputFluids));
         }
         getBaseMetaTileEntity().markDirty();
     }
@@ -2471,6 +2477,14 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private int getRunnableParallel(ProcessNode node, int parallelLimit, boolean debugRuntime) {
+        if (node.isRecyclerNode()) {
+            long available = availableRecyclerInputAmount(node);
+            long perRun = recyclerInputCost(node);
+            if (available < perRun) {
+                return 0;
+            }
+            return (int) Math.min(Integer.MAX_VALUE, Math.min(Math.max(1L, parallelLimit), available / perRun));
+        }
         long runnable = Math.max(1, parallelLimit);
         boolean hasInput = false;
         for (int slot = 0; slot < node.inputHandler.getSlots(); slot++) {
@@ -2515,22 +2529,48 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         return Math.max(0, clampInputInt(INDEX_MANUAL_OVERCLOCKS));
     }
 
+    private int getOverclocksToOneTick(int durationTicks) {
+        int overclocks = 0;
+        double duration = Math.max(1, durationTicks);
+        while (duration >= 2.0D && overclocks < 64) {
+            duration /= 4.0D;
+            overclocks++;
+        }
+        return overclocks;
+    }
+
+    private int getEffectiveOverclockCount(ProcessNode node) {
+        int requested = Math.max(0, node.overclockCount) + getGlobalExtraOverclocks();
+        return Math.min(requested, getOverclocksToOneTick(getBaseDurationTicks(node)));
+    }
+
+    private int getBaseDurationTicks(ProcessNode node) {
+        return Math.max(1, node.baseDurationTicks > 0 ? node.baseDurationTicks : node.durationTicks);
+    }
+
+    private long getBaseEuPerTick(ProcessNode node) {
+        return Math.max(0L, node.baseEuPerTick > 0L ? node.baseEuPerTick : node.euPerTick);
+    }
+
     private int getEffectiveParallelLimit(ProcessNode node) {
+        if (node.isRecyclerNode()) {
+            return Integer.MAX_VALUE;
+        }
         return (int) Math
             .min(Integer.MAX_VALUE, safeMultiply(Math.max(1, node.parallelLimit), getGlobalParallelMultiplier()));
     }
 
     private int getEffectiveDurationTicks(ProcessNode node) {
-        long duration = Math.max(1L, node.durationTicks);
-        for (int i = 0; i < getGlobalExtraOverclocks(); i++) {
+        long duration = getBaseDurationTicks(node);
+        for (int i = 0; i < getEffectiveOverclockCount(node); i++) {
             duration = Math.max(1L, (duration + 3L) / 4L);
         }
         return (int) Math.min(Integer.MAX_VALUE, duration);
     }
 
     private long getEffectiveEuPerTick(ProcessNode node) {
-        long euPerTick = Math.max(0L, node.euPerTick);
-        for (int i = 0; i < getGlobalExtraOverclocks(); i++) {
+        long euPerTick = getBaseEuPerTick(node);
+        for (int i = 0; i < getEffectiveOverclockCount(node); i++) {
             euPerTick = safeMultiply(euPerTick, 4L);
         }
         return euPerTick;
@@ -2543,6 +2583,9 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     private boolean canStartNode(ProcessNode node, int parallel, boolean debugRuntime) {
         if (isInternalOutputThrottled(node, debugRuntime)) {
             return false;
+        }
+        if (node.isRecyclerNode()) {
+            return availableRecyclerInputAmount(node) >= safeMultiply(recyclerInputCost(node), Math.max(1, parallel));
         }
         for (int slot = 0; slot < node.inputHandler.getSlots(); slot++) {
             ItemStack stack = node.inputHandler.getStackInSlot(slot);
@@ -2590,6 +2633,9 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         if (!canStartNode(node, parallel, false)) {
             return false;
         }
+        if (node.isRecyclerNode()) {
+            return consumeRecyclerInputs(node, job, safeMultiply(recyclerInputCost(node), Math.max(1, parallel)));
+        }
         ArrayList<ItemStack> stagedItems = new ArrayList<>();
         ArrayList<FluidStack> stagedFluids = new ArrayList<>();
         for (int slot = 0; slot < node.inputHandler.getSlots(); slot++) {
@@ -2626,6 +2672,64 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         return true;
     }
 
+    private long recyclerInputCost(ProcessNode node) {
+        return node != null && node.recyclerOutputsScrapbox ? 9L : 1L;
+    }
+
+    private long availableRecyclerInputAmount(ProcessNode node) {
+        long amount = 0L;
+        for (BufferedItemStack entry : internalItems) {
+            if (entry == null || entry.stack == null || entry.amount <= 0L || !recyclerAcceptsItem(node, entry.stack)) {
+                continue;
+            }
+            long stored = entry.amount;
+            if (isCyclicItemTarget(entry.stack)) {
+                stored = Math.max(0L, stored - getCyclicItemReserveMin(entry.stack));
+            }
+            amount = safeAddLong(amount, stored);
+        }
+        return amount;
+    }
+
+    private boolean recyclerAcceptsItem(ProcessNode node, ItemStack stack) {
+        if (node == null || stack == null) {
+            return false;
+        }
+        for (int slot = 0; slot < node.inputHandler.getSlots(); slot++) {
+            ItemStack input = node.inputHandler.getStackInSlot(slot);
+            if (input != null && !isFluidDisplay(input) && itemMatches(input, stack)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean consumeRecyclerInputs(ProcessNode node, RunningJob job, long amount) {
+        long remaining = amount;
+        ArrayList<ItemStack> stagedItems = new ArrayList<>();
+        for (int slot = 0; slot < node.inputHandler.getSlots() && remaining > 0L; slot++) {
+            ItemStack input = node.inputHandler.getStackInSlot(slot);
+            if (input == null || isFluidDisplay(input)) {
+                continue;
+            }
+            long available = countConsumableInternalItemAmount(input);
+            long consumed = Math.min(remaining, available);
+            if (consumed <= 0L) {
+                continue;
+            }
+            long leftover = removeConsumableItemFromBuffer(input, consumed, stagedItems);
+            remaining -= consumed - leftover;
+        }
+        if (remaining > 0L) {
+            rollbackStagedInputs(stagedItems, java.util.Collections.emptyList());
+            return false;
+        }
+        for (ItemStack stack : stagedItems) {
+            addItemToStackList(job.consumedItems, stack);
+        }
+        return true;
+    }
+
     private void rollbackStagedInputs(List<ItemStack> stagedItems, List<FluidStack> stagedFluids) {
         for (ItemStack stack : stagedItems) {
             addItemToBuffer(internalItems, stack, getStackAmount(stack));
@@ -2636,8 +2740,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private void finishRunningJob(ProcessNode node, int parallel) {
-        SuperFactory.LOG
-            .info("[Super Integrated Factory/Runtime] 完成节点: node={}, parallel={}", describeNode(node), parallel);
         for (int slot = 0; slot < node.outputHandler.getSlots(); slot++) {
             ItemStack stack = node.outputHandler.getStackInSlot(slot);
             if (stack == null) {
@@ -2647,59 +2749,47 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             if (isFluidDisplay(stack)) {
                 FluidStack fluid = GTUtility.getFluidFromDisplayStack(stack);
                 if (fluid != null) {
-                    FluidStack output = fluid.copy();
-                    output.amount = (int) Math.min(Integer.MAX_VALUE, amount);
-                    routeFluidOutput(node, output);
+                    routeFluidOutput(node, fluid, amount);
                 }
             } else {
                 long rolls = ParallelHelper
                     .calculateIntegralChancedOutputMultiplier(node.getOutputChance(slot), Math.max(1, parallel));
                 if (rolls > 0) {
-                    ItemStack output = stack.copy();
-                    output.stackSize = (int) Math.min(Integer.MAX_VALUE, safeMultiply(getStackAmount(stack), rolls));
-                    routeItemOutput(node, output);
+                    routeItemOutput(node, stack, safeMultiply(getStackAmount(stack), rolls));
                 }
             }
         }
     }
 
-    private void routeItemOutput(ProcessNode node, ItemStack output) {
+    private void routeItemOutput(ProcessNode node, ItemStack output, long amount) {
+        if (output == null || amount <= 0L) {
+            return;
+        }
         boolean cyclicTarget = node.endNode && graphConsumesItem(output);
         boolean internal = cyclicTarget || !node.endNode && hasDirectItemConsumer(node, output);
-        SuperFactory.LOG.info(
-            "[Super Integrated Factory/Runtime] 路由物品输出: node={}, output={}, internal={}, cyclicTarget={}, endNode={}",
-            describeNode(node),
-            describeItem(output),
-            internal,
-            cyclicTarget,
-            node.endNode);
         if (internal) {
-            addItemToBuffer(internalItems, output, getStackAmount(output));
+            addItemToBuffer(internalItems, output, amount);
             if (cyclicTarget) {
                 spillCyclicItemOverflow(output);
             }
         } else {
-            addItemToBuffer(outputItems, output, getStackAmount(output));
+            addItemToBuffer(outputItems, output, amount);
         }
     }
 
-    private void routeFluidOutput(ProcessNode node, FluidStack output) {
+    private void routeFluidOutput(ProcessNode node, FluidStack output, long amount) {
+        if (output == null || amount <= 0L) {
+            return;
+        }
         boolean cyclicTarget = node.endNode && graphConsumesFluid(output);
         boolean internal = cyclicTarget || !node.endNode && hasDirectFluidConsumer(node, output);
-        SuperFactory.LOG.info(
-            "[Super Integrated Factory/Runtime] 路由流体输出: node={}, output={}, internal={}, cyclicTarget={}, endNode={}",
-            describeNode(node),
-            describeFluid(output),
-            internal,
-            cyclicTarget,
-            node.endNode);
         if (internal) {
-            addFluidToBuffer(internalFluids, output, output.amount);
+            addFluidToBuffer(internalFluids, output, amount);
             if (cyclicTarget) {
                 spillCyclicFluidOverflow(output);
             }
         } else {
-            addFluidToBuffer(outputFluids, output, output.amount);
+            addFluidToBuffer(outputFluids, output, amount);
         }
     }
 
@@ -3593,46 +3683,23 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private long getStackAmount(ItemStack stack) {
-        FluidStack fluid = GTUtility.getFluidFromDisplayStack(stack);
-        if (fluid != null) {
-            return Math.max(1, fluid.amount);
-        }
-        return stack == null ? 0L : Math.max(1, stack.stackSize);
+        return Math.max(0L, ProcessNode.getDisplayAmount(stack));
     }
 
     private long safeMultiply(long a, long b) {
-        if (a > 0L && b > Long.MAX_VALUE / a) {
-            return Long.MAX_VALUE;
-        }
-        return a * b;
+        return ProcessRuntimeMath.safeMultiply(a, b);
     }
 
     private long safeAddLong(long a, long b) {
-        if (b > 0L && a > Long.MAX_VALUE - b) {
-            return Long.MAX_VALUE;
-        }
-        return a + b;
+        return ProcessRuntimeMath.safeAdd(a, b);
     }
 
     private long safeCeilMultiply(long value, long numerator, long denominator) {
-        if (denominator <= 0L) {
-            return Long.MAX_VALUE;
-        }
-        long product = safeMultiply(Math.max(0L, value), Math.max(0L, numerator));
-        if (product == Long.MAX_VALUE) {
-            return product;
-        }
-        long roundingOffset = denominator - 1L;
-        if (roundingOffset > 0L && product > Long.MAX_VALUE - roundingOffset) {
-            return Long.MAX_VALUE;
-        }
-        return (product + roundingOffset) / denominator;
+        return ProcessRuntimeMath.safeCeilMultiply(value, numerator, denominator);
     }
 
     private ItemStack copyItemAmount(ItemStack stack, long amount) {
-        ItemStack copy = stack.copy();
-        copy.stackSize = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, amount));
-        return copy;
+        return ProcessNode.withDisplayAmount(stack, amount);
     }
 
     private FluidStack copyFluidAmount(FluidStack stack, long amount) {
@@ -3645,16 +3712,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private void addItemToBuffer(List<BufferedItemStack> buffer, ItemStack stack, long amount) {
-        if (stack == null || amount <= 0L) {
-            return;
-        }
-        for (BufferedItemStack existing : buffer) {
-            if (existing != null && existing.stack != null && GTUtility.areStacksEqual(existing.stack, stack, true)) {
-                existing.amount = safeAddLong(existing.amount, amount);
-                return;
-            }
-        }
-        buffer.add(new BufferedItemStack(stack, amount));
+        ProcessBufferUtil.addItem(buffer, stack, amount, (left, right) -> GTUtility.areStacksEqual(left, right, true));
     }
 
     private void addItemToStackList(List<ItemStack> buffer, ItemStack stack) {
@@ -3671,16 +3729,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private void addFluidToBuffer(List<BufferedFluidStack> buffer, FluidStack stack, long amount) {
-        if (stack == null || amount <= 0L) {
-            return;
-        }
-        for (BufferedFluidStack existing : buffer) {
-            if (existing != null && existing.fluidStack != null && existing.fluidStack.isFluidEqual(stack)) {
-                existing.amount = safeAddLong(existing.amount, amount);
-                return;
-            }
-        }
-        buffer.add(new BufferedFluidStack(stack, amount));
+        ProcessBufferUtil.addFluid(buffer, stack, amount);
     }
 
     private void addFluidToStackList(List<FluidStack> buffer, FluidStack stack) {
@@ -3697,26 +3746,11 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private long countItemInBuffer(List<BufferedItemStack> buffer, ItemStack template) {
-        long amount = 0L;
-        for (BufferedItemStack entry : buffer) {
-            if (entry != null && entry.stack != null && itemMatches(template, entry.stack)) {
-                amount = safeAddLong(amount, entry.amount);
-            }
-        }
-        return amount;
+        return ProcessBufferUtil.countItem(buffer, template, this::itemMatches);
     }
 
     private long countFluidInBuffer(List<BufferedFluidStack> buffer, FluidStack template) {
-        if (template == null) {
-            return 0L;
-        }
-        long amount = 0L;
-        for (BufferedFluidStack stack : buffer) {
-            if (stack != null && stack.fluidStack != null && stack.fluidStack.isFluidEqual(template)) {
-                amount = safeAddLong(amount, stack.amount);
-            }
-        }
-        return amount;
+        return ProcessBufferUtil.countFluid(buffer, template);
     }
 
     private long removeItemFromBuffer(List<BufferedItemStack> buffer, ItemStack template, long amount) {
@@ -3725,44 +3759,17 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
 
     private long removeItemFromBuffer(List<BufferedItemStack> buffer, ItemStack template, long amount,
         List<ItemStack> consumedItems) {
-        long remaining = amount;
-        Iterator<BufferedItemStack> iterator = buffer.iterator();
-        while (iterator.hasNext() && remaining > 0L) {
-            BufferedItemStack entry = iterator.next();
-            if (entry == null || entry.stack == null || !itemMatches(template, entry.stack)) {
-                continue;
-            }
-            long removed = Math.min(remaining, entry.amount);
-            entry.amount -= removed;
-            remaining -= removed;
-            if (consumedItems != null && removed > 0L) {
-                addItemToStackList(consumedItems, copyItemAmount(entry.stack, removed));
-            }
-            if (entry.amount <= 0L) {
-                iterator.remove();
-            }
-        }
-        return remaining;
+        return ProcessBufferUtil.removeItem(
+            buffer,
+            template,
+            amount,
+            this::itemMatches,
+            consumedItems == null ? null
+                : (stack, removed) -> addItemToStackList(consumedItems, copyItemAmount(stack, removed)));
     }
 
     private long removeFluidFromBuffer(List<BufferedFluidStack> buffer, FluidStack template, long amount) {
-        long remaining = amount;
-        Iterator<BufferedFluidStack> iterator = buffer.iterator();
-        while (iterator.hasNext() && remaining > 0L) {
-            BufferedFluidStack stack = iterator.next();
-            if (stack == null || stack.fluidStack == null
-                || template == null
-                || !stack.fluidStack.isFluidEqual(template)) {
-                continue;
-            }
-            long removed = Math.min(remaining, stack.amount);
-            stack.amount -= removed;
-            remaining -= removed;
-            if (stack.amount <= 0L) {
-                iterator.remove();
-            }
-        }
-        return remaining;
+        return ProcessBufferUtil.removeFluid(buffer, template, amount);
     }
 
     private long countItemInDualInputHatches(ItemStack template) {
@@ -3776,7 +3783,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
                 if (inventory == null || inventory.isEmpty()) {
                     continue;
                 }
-                amount += countItemInStacks(template, inventory.getItemInputs());
+                amount = safeAddLong(amount, countItemInStacks(template, inventory.getItemInputs()));
             }
         }
         return amount;
@@ -3796,7 +3803,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
                 if (inventory == null || inventory.isEmpty()) {
                     continue;
                 }
-                amount += countFluidInStacks(template, inventory.getFluidInputs());
+                amount = safeAddLong(amount, countFluidInStacks(template, inventory.getFluidInputs()));
             }
         }
         return amount;
@@ -3809,7 +3816,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         }
         for (ItemStack stack : stacks) {
             if (stack != null && stack.stackSize > 0 && itemMatches(template, stack)) {
-                amount += stack.stackSize;
+                amount = safeAddLong(amount, stack.stackSize);
             }
         }
         return amount;
@@ -3822,7 +3829,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         }
         for (FluidStack stack : stacks) {
             if (stack != null && stack.amount > 0 && stack.isFluidEqual(template)) {
-                amount += stack.amount;
+                amount = safeAddLong(amount, stack.amount);
             }
         }
         return amount;
@@ -4122,34 +4129,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             }
         }
         return lines;
-    }
-
-    private static final class BufferedItemStack {
-
-        private final ItemStack stack;
-        private long amount;
-
-        private BufferedItemStack(ItemStack stack, long amount) {
-            this.stack = stack == null ? null : stack.copy();
-            if (this.stack != null) {
-                this.stack.stackSize = 1;
-            }
-            this.amount = Math.max(0L, amount);
-        }
-    }
-
-    private static final class BufferedFluidStack {
-
-        private final FluidStack fluidStack;
-        private long amount;
-
-        private BufferedFluidStack(FluidStack fluidStack, long amount) {
-            this.fluidStack = fluidStack == null ? null : fluidStack.copy();
-            if (this.fluidStack != null) {
-                this.fluidStack.amount = 1;
-            }
-            this.amount = Math.max(0L, amount);
-        }
     }
 
     private enum RuntimeOutputKind {

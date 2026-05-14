@@ -1,5 +1,7 @@
 package com.nzoth.superfactory;
 
+import java.io.File;
+
 import com.nzoth.superfactory.common.loader.MachineLoader;
 import com.nzoth.superfactory.common.loader.RecipeLoader;
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
@@ -15,7 +17,10 @@ public class CommonProxy {
     // preInit "Run before anything else. Read your config, create blocks, items, etc, and register them with the
     // GameRegistry." (Remove if not needed)
     public void preInit(FMLPreInitializationEvent event) {
-        Config.synchronizeConfiguration(event.getSuggestedConfigurationFile());
+        File configFile = new File(
+            new File(event.getModConfigurationDirectory(), SuperFactory.MODID),
+            "superfactory.cfg");
+        Config.synchronizeConfiguration(configFile);
 
         SuperFactory.LOG.info(Config.greeting);
         SuperFactory.LOG.info("I am MyMod at version " + Tags.VERSION);

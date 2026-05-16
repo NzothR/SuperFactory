@@ -16,6 +16,8 @@ public class Config {
     public static boolean enableRuntimeAdjustment = false;
     public static boolean enableOutputRangeAdjustment = false;
     public static int superProxyFactorySuccessfulRecipeCacheSize = 64;
+    public static int superProxyFactoryPendingOutputEntryLimit = 64;
+    public static int superIntegratedFactoryMaxOutputFlushEntriesPerTick = 128;
     private static File boundConfigFile;
 
     public static void synchronizeConfiguration(File configFile) {
@@ -76,6 +78,20 @@ public class Config {
             0,
             1024,
             "Maximum number of recently successful recipes cached per Super Proxy Factory. Set to 0 to disable.");
+        superProxyFactoryPendingOutputEntryLimit = configuration.getInt(
+            "superProxyFactoryPendingOutputEntryLimit",
+            Configuration.CATEGORY_GENERAL,
+            superProxyFactoryPendingOutputEntryLimit,
+            0,
+            4096,
+            "Maximum number of buffered output stack entries allowed before the Super Proxy Factory pauses new recipes. Set to 0 to disable the pause.");
+        superIntegratedFactoryMaxOutputFlushEntriesPerTick = configuration.getInt(
+            "superIntegratedFactoryMaxOutputFlushEntriesPerTick",
+            Configuration.CATEGORY_GENERAL,
+            superIntegratedFactoryMaxOutputFlushEntriesPerTick,
+            0,
+            4096,
+            "Maximum number of Integrated Factory buffered item/fluid output entries flushed per tick. Set to 0 for unlimited.");
 
         if (configuration.hasChanged()) {
             configuration.save();

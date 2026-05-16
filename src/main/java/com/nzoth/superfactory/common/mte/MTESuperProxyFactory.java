@@ -34,6 +34,7 @@ import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.EnumChatFormatting;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.StatCollector;
@@ -54,6 +55,9 @@ import com.gtnewhorizons.modularui.common.widget.FakeSyncWidget;
 import com.gtnewhorizons.modularui.common.widget.SlotWidget;
 import com.gtnewhorizons.modularui.common.widget.TextWidget;
 import com.nzoth.superfactory.Config;
+import com.nzoth.superfactory.common.process.runtime.BufferedFluidStack;
+import com.nzoth.superfactory.common.process.runtime.BufferedItemStack;
+import com.nzoth.superfactory.common.process.runtime.ProcessBufferUtil;
 import com.nzoth.superfactory.common.recipe.ProxyRecipeConsumptionPlan;
 import com.nzoth.superfactory.common.recipe.ProxyRecipeEffectiveValues;
 import com.nzoth.superfactory.common.recipe.ProxyRecipeExecutionPlan;
@@ -73,6 +77,8 @@ import gregtech.api.interfaces.metatileentity.IMetaTileEntity;
 import gregtech.api.interfaces.tileentity.IGregTechTileEntity;
 import gregtech.api.interfaces.tileentity.RecipeMapWorkable;
 import gregtech.api.logic.ProcessingLogic;
+import gregtech.api.metatileentity.implementations.MTEHatchOutput;
+import gregtech.api.metatileentity.implementations.MTEHatchOutputBus;
 import gregtech.api.metatileentity.implementations.MTEMultiBlockBase;
 import gregtech.api.recipe.RecipeMap;
 import gregtech.api.recipe.RecipeMaps;
@@ -88,6 +94,8 @@ import gregtech.api.util.ParallelHelper;
 import gregtech.common.blocks.ItemMachines;
 import gregtech.common.misc.WirelessNetworkManager;
 import gregtech.common.tileentities.machines.IDualInputInventory;
+import gregtech.common.tileentities.machines.MTEHatchOutputBusME;
+import gregtech.common.tileentities.machines.MTEHatchOutputME;
 import tectech.thing.gui.TecTechUITextures;
 import tectech.thing.metaTileEntity.multi.base.LedStatus;
 import tectech.thing.metaTileEntity.multi.base.TTMultiblockBase;
@@ -138,6 +146,10 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
     private static final int LOCK_DETAIL_OUTPUT_LIMIT = 3;
     private static final int LOCK_DISPLAY_LINE_LIMIT = 8;
     private static final int RECYCLER_OUTPUT_CHANCE = 8000;
+    private static final int MAX_CLASSIC_ITEM_OUTPUT_PER_STACK = 64;
+    private static final int MAX_CLASSIC_FLUID_OUTPUT_PER_STACK = 16_000_000;
+    private static final int MAX_OUTPUT_ITEM_FLUSH_PER_TICK = 64;
+    private static final int MAX_OUTPUT_FLUID_FLUSH_PER_TICK = 16_000_000;
     private int casingCount;
     private List<String> cachedRecipeMapNames = new ArrayList<>();
     private int cachedRecipeMapIndex;
@@ -153,7 +165,13 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
     private int lastWirelessBaseDuration;
     private boolean wirelessRecipeRunning;
     private int lastAppliedOverclocks;
+    private int lastPowerLossParallel = 1;
+    private long lastPowerLossWarningTick = Long.MIN_VALUE;
+    private String lastPowerLossRecipeSummary = "";
     private final Map<String, List<GTRecipe>> successfulRecipeCache = new LinkedHashMap<>();
+    private final List<BufferedItemStack> pendingOutputItems = new ArrayList<>();
+    private final List<BufferedFluidStack> pendingOutputFluids = new ArrayList<>();
+    private long lastPendingOutputQueuedTick = Long.MIN_VALUE;
     /** Snapshot used for GUI/output display only; real consumption is performed against hatch inventories. */
     private List<ItemStack> inputSnapshotItems = new ArrayList<>();
     private List<FluidStack> inputSnapshotFluids = new ArrayList<>();
@@ -345,6 +363,9 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
     protected CheckRecipeResult checkProcessing_EM() {
         sanitizeParameterRelationships();
         setInputSeparation(isInputSeparationEnabled());
+        if (isPendingOutputQueueFull()) {
+            return CheckRecipeResultRegistry.ITEM_OUTPUT_FULL;
+        }
         if (!isRecipeLockEnabled() && getSingleRecipeCheck() != null) {
             setSingleRecipeCheck(null);
         }
@@ -550,10 +571,27 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
     }
 
     @Override
+    public void onPostTick(IGregTechTileEntity baseMetaTileEntity, long tick) {
+        super.onPostTick(baseMetaTileEntity, tick);
+        if (baseMetaTileEntity != null && baseMetaTileEntity.isServerSide() && tick != lastPendingOutputQueuedTick) {
+            flushPendingOutputs();
+        }
+    }
+
+    @Override
+    public void onFirstTick_EM(IGregTechTileEntity baseMetaTileEntity) {
+        if (baseMetaTileEntity != null && baseMetaTileEntity.isServerSide()) {
+            baseMetaTileEntity.issueTextureUpdate();
+        }
+    }
+
+    @Override
     protected void afterRecipeCheckFailed() {
         super.afterRecipeCheckFailed();
         wirelessRecipeRunning = false;
         lastAppliedOverclocks = 0;
+        lastPowerLossParallel = 1;
+        lastPowerLossRecipeSummary = "";
         lastLoopSoundTick = -20;
         lEUt = 0;
         currentOutputDisplayLines = new ArrayList<>();
@@ -563,16 +601,169 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
     public void outputAfterRecipe_EM() {
         wirelessRecipeRunning = false;
         lastAppliedOverclocks = 0;
+        lastPowerLossParallel = 1;
+        lastPowerLossRecipeSummary = "";
         lastLoopSoundTick = -20;
+        IGregTechTileEntity baseMetaTileEntity = getBaseMetaTileEntity();
+        lastPendingOutputQueuedTick = baseMetaTileEntity == null ? Long.MIN_VALUE : baseMetaTileEntity.getTimer();
+        queuePendingOutputs(mOutputItems, mOutputFluids);
+        mOutputItems = null;
+        mOutputFluids = null;
         super.outputAfterRecipe_EM();
     }
 
     @Override
     public void stopMachine(gregtech.api.util.shutdown.ShutDownReason reason) {
+        if (reason == gregtech.api.util.shutdown.ShutDownReasonRegistry.POWER_LOSS) {
+            sendPowerLossWarning(
+                lastPowerLossRecipeSummary,
+                mMaxProgresstime,
+                Math.abs(lEUt),
+                lastPowerLossParallel,
+                lastAppliedOverclocks);
+        }
         wirelessRecipeRunning = false;
         lastAppliedOverclocks = 0;
+        lastPowerLossParallel = 1;
+        lastPowerLossRecipeSummary = "";
         lastLoopSoundTick = -20;
         super.stopMachine(reason);
+    }
+
+    private String buildProxyRecipeSummary(ProxyRecipeExecutionPlan plan) {
+        if (plan == null || plan.recipe == null) {
+            return "";
+        }
+        return formatRecipeSummary(
+            describeProxyInputs(plan.recipe),
+            describeProxyOutputs(plan.outputItems, plan.outputFluids),
+            plan.rawDuration,
+            plan.euPerTick,
+            plan.actualParallel,
+            plan.overclocks,
+            false);
+    }
+
+    private String buildProxyRecipeSummary(GTRecipe recipe, int parallel) {
+        if (recipe == null) {
+            return "";
+        }
+        int safeParallel = Math.max(1, parallel);
+        return formatRecipeSummary(
+            describeProxyInputs(recipe),
+            describeProxyOutputs(
+                ProxyRecipeExecutor.buildRawItemOutputs(recipe, safeParallel),
+                ProxyRecipeExecutor.buildRawFluidOutputs(recipe, safeParallel)),
+            ProxyRecipeEffectiveValues.duration(recipe),
+            ProxyRecipeEffectiveValues.inputEuPerTick(recipe),
+            safeParallel,
+            0,
+            false);
+    }
+
+    private List<String> describeProxyInputs(GTRecipe recipe) {
+        return collectRecipeEntryLines(
+            ProxyRecipeEffectiveValues.itemInputs(recipe),
+            ProxyRecipeEffectiveValues.fluidInputs(recipe),
+            false);
+    }
+
+    private List<String> describeProxyOutputs(ItemStack[] items, FluidStack[] fluids) {
+        return collectRecipeEntryLines(items, fluids, true);
+    }
+
+    private String formatRecipeSummary(List<String> inputs, List<String> outputs, int durationTicks, long euPerTick,
+        int parallel, int overclocks, boolean useEquals) {
+        String inputText = inputs == null || inputs.isEmpty() ? "?" : String.join(" + ", inputs);
+        String outputText = outputs == null || outputs.isEmpty() ? "?" : String.join(" + ", outputs);
+        String connector = useEquals ? " = " : " -> ";
+        return inputText + connector + outputText;
+    }
+
+    private String formatRecipeTiming(int durationTicks, long euPerTick, int parallel, int overclocks) {
+        return "耗时=" + Math.max(0, durationTicks)
+            + "t"
+            + ", 耗能="
+            + formatEnergyPerTick(euPerTick)
+            + ", 并行数="
+            + Math.max(1, parallel)
+            + ", 超频次数="
+            + Math.max(0, overclocks);
+    }
+
+    private String formatEnergyPerTick(long euPerTick) {
+        if (euPerTick <= 0L) {
+            return "0 EU/t";
+        }
+        long maxVoltage = GTValues.V[GTValues.V.length - 1];
+        long amperage = Math.max(1L, (euPerTick + maxVoltage - 1L) / maxVoltage);
+        return amperage + "A MAX EU/t (" + euPerTick + " EU/t)";
+    }
+
+    private void sendPowerLossWarning(String recipeSummary, int durationTicks, long euPerTick, int parallel,
+        int overclocks) {
+        IGregTechTileEntity baseMetaTileEntity = getBaseMetaTileEntity();
+        if (baseMetaTileEntity == null || !baseMetaTileEntity.isServerSide()) {
+            return;
+        }
+        if (!canSendPowerLossWarning(baseMetaTileEntity)) {
+            return;
+        }
+        EntityPlayer owner = findOnlineOwner(baseMetaTileEntity);
+        if (owner == null) {
+            return;
+        }
+        String coord = "(" + baseMetaTileEntity
+            .getXCoord() + ", " + baseMetaTileEntity.getYCoord() + ", " + baseMetaTileEntity.getZCoord() + ")";
+        String machine = getMachineDisplayName(baseMetaTileEntity);
+        String message = "在 " + coord
+            + " 的 \""
+            + machine
+            + "\" 发生跳电，执行配方为 \""
+            + (recipeSummary == null || recipeSummary.isEmpty() ? "?" : recipeSummary)
+            + "\"，"
+            + formatRecipeTiming(durationTicks, euPerTick, parallel, overclocks);
+        GTUtility.sendChatToPlayer(owner, message);
+    }
+
+    private boolean canSendPowerLossWarning(IGregTechTileEntity baseMetaTileEntity) {
+        if (baseMetaTileEntity == null) {
+            return false;
+        }
+        long tick = baseMetaTileEntity.getTimer();
+        if (tick - lastPowerLossWarningTick < 100L) {
+            return false;
+        }
+        lastPowerLossWarningTick = tick;
+        return true;
+    }
+
+    private EntityPlayer findOnlineOwner(IGregTechTileEntity baseMetaTileEntity) {
+        if (baseMetaTileEntity == null || baseMetaTileEntity.getOwnerUuid() == null) {
+            return null;
+        }
+        MinecraftServer server = MinecraftServer.getServer();
+        if (server == null || server.getConfigurationManager() == null) {
+            return null;
+        }
+        for (Object obj : server.getConfigurationManager().playerEntityList) {
+            if (obj instanceof EntityPlayer player && baseMetaTileEntity.getOwnerUuid()
+                .equals(player.getUniqueID())) {
+                return player;
+            }
+        }
+        return null;
+    }
+
+    private String getMachineDisplayName(IGregTechTileEntity baseMetaTileEntity) {
+        if (baseMetaTileEntity != null && baseMetaTileEntity.getMetaTileEntity() != null) {
+            String localName = baseMetaTileEntity.getMetaTileEntity()
+                .getLocalName();
+            if (localName != null && !localName.isEmpty()) {
+                return localName;
+            }
+        }
+        return getLocalName();
     }
 
     @Override
@@ -591,7 +782,8 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         if (side != facing) {
             return new ITexture[] { Textures.BlockIcons.getCasingTextureForId(CASING_INDEX) };
         }
-        if (active) {
+        boolean controllerActive = active || shouldRenderControllerActive(baseMetaTileEntity);
+        if (controllerActive) {
             return new ITexture[] { Textures.BlockIcons.getCasingTextureForId(CASING_INDEX), TextureFactory.builder()
                 .addIcon(Textures.BlockIcons.OVERLAY_FRONT_ASSEMBLY_LINE_ACTIVE)
                 .extFacing()
@@ -611,6 +803,10 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
                 .extFacing()
                 .glow()
                 .build() };
+    }
+
+    private boolean shouldRenderControllerActive(IGregTechTileEntity baseMetaTileEntity) {
+        return baseMetaTileEntity != null && baseMetaTileEntity.isAllowedToWork() && mMachine;
     }
 
     @Override
@@ -705,6 +901,8 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         aNBT.setInteger("CachedMachineCount", cachedMachineCount);
         aNBT.setInteger("CachedParallelLimit", cachedParallelLimit);
         aNBT.setString("LastCacheMessage", lastCacheMessage);
+        aNBT.setTag("PendingOutputItems", writeItemList(pendingOutputItems));
+        aNBT.setTag("PendingOutputFluids", writeFluidList(pendingOutputFluids));
 
         NBTTagList recipeList = new NBTTagList();
         for (String recipeMapName : cachedRecipeMapNames) {
@@ -728,6 +926,8 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         cachedMachineCount = Math.max(0, aNBT.getInteger("CachedMachineCount"));
         cachedParallelLimit = Math.max(1, aNBT.getInteger("CachedParallelLimit"));
         lastCacheMessage = aNBT.getString("LastCacheMessage");
+        readItemList(aNBT.getTagList("PendingOutputItems", Constants.NBT.TAG_COMPOUND), pendingOutputItems);
+        readFluidList(aNBT.getTagList("PendingOutputFluids", Constants.NBT.TAG_COMPOUND), pendingOutputFluids);
         cachedRecipeMapNames.clear();
         NBTTagList recipeList = aNBT.getTagList("CachedRecipeMaps", Constants.NBT.TAG_COMPOUND);
         for (int i = 0; i < recipeList.tagCount(); i++) {
@@ -853,7 +1053,7 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             if (maxAmount > 0) {
                 amount = Math.min(amount, maxAmount);
             }
-            ParallelHelper.addItemsLong(transformed, stack, amount);
+            addItemCompact(transformed, stack, amount);
         }
         return transformed.isEmpty() ? null : transformed.toArray(new ItemStack[0]);
     }
@@ -880,13 +1080,31 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             if (maxAmount > 0) {
                 amount = Math.min(amount, maxAmount);
             }
-            ParallelHelper.addFluidsLong(transformed, stack, amount);
+            addFluidCompact(transformed, stack, amount);
         }
         return transformed.isEmpty() ? null : transformed.toArray(new FluidStack[0]);
     }
 
     private int transformDuration(int rawDuration) {
         return RuntimeTransform.clampFinalDuration(rawDuration, getMinimumRuntime(), getMaximumRuntime());
+    }
+
+    private ItemStack copyItemAmount(ItemStack stack, long amount) {
+        if (stack == null || amount <= 0L) {
+            return null;
+        }
+        ItemStack copy = stack.copy();
+        copy.stackSize = (int) Math.min(Integer.MAX_VALUE, amount);
+        return copy;
+    }
+
+    private FluidStack copyFluidAmount(FluidStack stack, long amount) {
+        if (stack == null || amount <= 0L) {
+            return null;
+        }
+        FluidStack copy = stack.copy();
+        copy.amount = (int) Math.min(Integer.MAX_VALUE, amount);
+        return copy;
     }
 
     private void captureInputSnapshots() {
@@ -962,7 +1180,7 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
                 continue;
             }
             long scaledAmount = scaleLongCeil(stack.stackSize, toParallel, fromParallel);
-            ParallelHelper.addItemsLong(scaled, stack, scaledAmount);
+            addItemCompact(scaled, stack, scaledAmount);
         }
         return scaled.isEmpty() ? null : scaled.toArray(new ItemStack[0]);
     }
@@ -977,9 +1195,35 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
                 continue;
             }
             long scaledAmount = scaleLongCeil(stack.amount, toParallel, fromParallel);
-            ParallelHelper.addFluidsLong(scaled, stack, scaledAmount);
+            addFluidCompact(scaled, stack, scaledAmount);
         }
         return scaled.isEmpty() ? null : scaled.toArray(new FluidStack[0]);
+    }
+
+    private void addItemCompact(ArrayList<ItemStack> out, ItemStack template, long amount) {
+        if (template == null || amount <= 0L) {
+            return;
+        }
+        long remaining = amount;
+        while (remaining > 0L) {
+            ItemStack copy = template.copy();
+            copy.stackSize = (int) Math.min(Integer.MAX_VALUE, remaining);
+            out.add(copy);
+            remaining -= copy.stackSize;
+        }
+    }
+
+    private void addFluidCompact(ArrayList<FluidStack> out, FluidStack template, long amount) {
+        if (template == null || amount <= 0L) {
+            return;
+        }
+        long remaining = amount;
+        while (remaining > 0L) {
+            FluidStack copy = template.copy();
+            copy.amount = (int) Math.min(Integer.MAX_VALUE, remaining);
+            out.add(copy);
+            remaining -= copy.amount;
+        }
     }
 
     private int scaleIntCeil(int value, int numerator, int denominator) {
@@ -1234,6 +1478,17 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
     }
 
     private boolean canOutputSafely(ItemStack[] itemOutputs, FluidStack[] fluidOutputs) {
+        boolean fastItemOutput = itemOutputs == null || hasFastItemOutputBus();
+        boolean fastFluidOutput = fluidOutputs == null || hasFastFluidOutputHatch();
+        if (fastItemOutput && fastFluidOutput) {
+            return true;
+        }
+        if (fastItemOutput) {
+            return canOutputAll(null, fluidOutputs);
+        }
+        if (fastFluidOutput) {
+            return canOutputAll(itemOutputs, null);
+        }
         return canOutputAll(itemOutputs, fluidOutputs);
     }
 
@@ -1680,7 +1935,8 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
     }
 
     private CheckRecipeResult tryStartRecipeForMachineManagedInputs(RecipeMap<?> recipeMap) {
-        ItemStack[] liveItems = normalizeLiveItemRefs(getStoredInputs());
+        List<ItemStack> storedInputs = getStoredInputs();
+        ItemStack[] liveItems = normalizeLiveItemRefs(storedInputs);
         FluidStack[] liveFluids = normalizeLiveFluidRefs(getStoredFluids());
         if (liveItems.length == 0 && liveFluids.length == 0) {
             return CheckRecipeResultRegistry.NO_RECIPE;
@@ -1689,7 +1945,7 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             (byte) -1,
             liveItems,
             liveFluids,
-            buildMachineManagedQueryItems(liveItems),
+            buildMachineManagedQueryItems(liveItems, storedInputs),
             buildQueryFluids(liveFluids),
             true);
         return tryStartRecipeForInputs(recipeMap, inputGroup);
@@ -1910,7 +2166,22 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
 
         int actualParallel = computePowerBoundParallel(recipe, inputBound);
         if (actualParallel <= 0) {
+            if (recipeCheck == null) {
+                lastPowerLossRecipeSummary = buildProxyRecipeSummary(recipe, inputBound);
+                lastPowerLossParallel = Math.max(1, inputBound);
+                lastAppliedOverclocks = 0;
+                sendPowerLossWarning(
+                    lastPowerLossRecipeSummary,
+                    ProxyRecipeEffectiveValues.duration(recipe),
+                    ProxyRecipeEffectiveValues.inputEuPerTick(recipe),
+                    lastPowerLossParallel,
+                    lastAppliedOverclocks);
+            }
             return CheckRecipeResultRegistry.insufficientPower(ProxyRecipeEffectiveValues.inputEuPerTick(recipe));
+        }
+        actualParallel = clampOutputParallel(recipe, actualParallel);
+        if (actualParallel <= 0) {
+            return CheckRecipeResultRegistry.ITEM_OUTPUT_FULL;
         }
 
         int executionInputBound = ProxyRecipeInputHandler.hasConsumableInputs(recipe) ? totalInputBound : inputBound;
@@ -2001,7 +2272,7 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             return false;
         }
         if (inputGroup.machineManaged) {
-            return consumeMachineManagedInputGroup(consumptionPlan);
+            return consumeMachineManagedInputGroup(consumptionPlan, inputGroup);
         }
         consumeItemDemands(consumptionPlan, inputGroup.liveItems);
         consumeFluidDemands(consumptionPlan, inputGroup.liveFluids);
@@ -2018,50 +2289,20 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         return true;
     }
 
-    private boolean consumeMachineManagedInputGroup(ProxyRecipeConsumptionPlan consumptionPlan) {
-        for (ProxyRecipeConsumptionPlan.ItemDemand demand : consumptionPlan.itemDemands) {
-            if (depleteMachineManagedItemDemand(consumptionPlan, demand) > 0L) {
-                return false;
-            }
+    private boolean consumeMachineManagedInputGroup(ProxyRecipeConsumptionPlan consumptionPlan,
+        ProxyRecipeInputGroup inputGroup) {
+        ItemStack[] liveItems = inputGroup.liveItems == null ? GTValues.emptyItemStackArray : inputGroup.liveItems;
+        FluidStack[] liveFluids = inputGroup.liveFluids == null ? GTValues.emptyFluidStackArray : inputGroup.liveFluids;
+        if (!ProxyRecipeInputHandler.canSatisfyConsumptionPlan(consumptionPlan, liveItems, liveFluids)) {
+            return false;
         }
+        consumeItemDemands(consumptionPlan, liveItems);
         for (ProxyRecipeConsumptionPlan.FluidDemand demand : consumptionPlan.fluidDemands) {
             if (drainMachineManagedFluidDemand(demand) > 0L) {
                 return false;
             }
         }
         return true;
-    }
-
-    private long depleteMachineManagedItemDemand(ProxyRecipeConsumptionPlan consumptionPlan,
-        ProxyRecipeConsumptionPlan.ItemDemand demand) {
-        long remaining = demand.amount;
-        while (remaining > 0L) {
-            ItemStack available = findMachineManagedItemInput(consumptionPlan, demand);
-            if (available == null) {
-                break;
-            }
-            ItemStack request = GTUtility.copyOrNull(available);
-            if (request == null) {
-                break;
-            }
-            request.stackSize = (int) Math.min(Math.min(remaining, available.stackSize), request.getMaxStackSize());
-            if (request.stackSize <= 0 || !depleteInput(request)) {
-                break;
-            }
-            remaining -= request.stackSize;
-        }
-        return remaining;
-    }
-
-    private ItemStack findMachineManagedItemInput(ProxyRecipeConsumptionPlan consumptionPlan,
-        ProxyRecipeConsumptionPlan.ItemDemand demand) {
-        for (ItemStack stack : normalizeLiveItemRefs(getStoredInputs())) {
-            if (stack != null && stack.stackSize > 0
-                && ProxyRecipeInputHandler.matchesItemDemand(consumptionPlan, demand, stack)) {
-                return stack;
-            }
-        }
-        return null;
     }
 
     private long drainMachineManagedFluidDemand(ProxyRecipeConsumptionPlan.FluidDemand demand) {
@@ -2170,6 +2411,8 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         lastWirelessCalculatedEut = Math.max(0L, plan.euPerTick);
         lastWirelessBaseDuration = Math.max(1, plan.rawDuration);
         lastAppliedOverclocks = Math.max(0, plan.overclocks);
+        lastPowerLossParallel = Math.max(1, plan.actualParallel);
+        lastPowerLossRecipeSummary = buildProxyRecipeSummary(plan);
         mOutputItems = plan.outputItems;
         mOutputFluids = plan.outputFluids;
         mMaxProgresstime = Math.max(1, plan.transformedDuration);
@@ -2186,11 +2429,275 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         }
     }
 
+    private boolean hasPendingOutputs() {
+        return !pendingOutputItems.isEmpty() || !pendingOutputFluids.isEmpty();
+    }
+
+    private boolean isPendingOutputQueueFull() {
+        int limit = Config.superProxyFactoryPendingOutputEntryLimit;
+        return limit > 0 && pendingOutputItems.size() + pendingOutputFluids.size() >= limit;
+    }
+
+    private void clearPendingOutputs() {
+        pendingOutputItems.clear();
+        pendingOutputFluids.clear();
+    }
+
+    private void queuePendingOutputs(ItemStack[] itemOutputs, FluidStack[] fluidOutputs) {
+        if (itemOutputs != null) {
+            for (ItemStack stack : itemOutputs) {
+                if (stack != null && stack.stackSize > 0) {
+                    addPendingItemOutput(stack, stack.stackSize);
+                }
+            }
+        }
+        if (fluidOutputs != null) {
+            for (FluidStack stack : fluidOutputs) {
+                if (stack != null && stack.amount > 0) {
+                    addPendingFluidOutput(stack, stack.amount);
+                }
+            }
+        }
+    }
+
+    private void addPendingItemOutput(ItemStack stack, long amount) {
+        ProcessBufferUtil
+            .addItem(pendingOutputItems, stack, amount, (left, right) -> GTUtility.areStacksEqual(left, right, true));
+    }
+
+    private void addPendingFluidOutput(FluidStack stack, long amount) {
+        ProcessBufferUtil.addFluid(pendingOutputFluids, stack, amount);
+    }
+
+    private void flushPendingOutputs() {
+        flushPendingItemOutputs();
+        flushPendingFluidOutputs();
+    }
+
+    private void flushPendingItemOutputs() {
+        Iterator<BufferedItemStack> iterator = pendingOutputItems.iterator();
+        while (iterator.hasNext()) {
+            BufferedItemStack entry = iterator.next();
+            if (entry == null || entry.stack == null || entry.amount <= 0L) {
+                iterator.remove();
+                continue;
+            }
+            long moved = flushPendingItemOutput(entry);
+            if (moved <= 0L) {
+                break;
+            }
+            entry.amount = Math.max(0L, entry.amount - moved);
+            if (entry.amount <= 0L) {
+                iterator.remove();
+            }
+            if (moved < MAX_OUTPUT_ITEM_FLUSH_PER_TICK && !hasFastItemOutputBus()) {
+                break;
+            }
+        }
+    }
+
+    private long flushPendingItemOutput(BufferedItemStack entry) {
+        long moved = flushPendingItemToMeBusses(entry);
+        if (moved > 0L) {
+            return moved;
+        }
+        moved = flushPendingItemToOutputBusses(entry, MAX_OUTPUT_ITEM_FLUSH_PER_TICK);
+        if (moved > 0L) {
+            return moved;
+        }
+        return flushPendingItemToOutputHatches(entry, Math.min(entry.amount, MAX_OUTPUT_ITEM_FLUSH_PER_TICK));
+    }
+
+    private long flushPendingItemToMeBusses(BufferedItemStack entry) {
+        long remaining = entry.amount;
+        for (MTEHatchOutputBus bus : mOutputBusses) {
+            if (remaining <= 0L) {
+                break;
+            }
+            if (!(bus instanceof MTEHatchOutputBusME) || bus == null || !bus.isValid()) {
+                continue;
+            }
+            long offered = Math.min(remaining, Integer.MAX_VALUE);
+            ItemStack request = copyItemAmount(entry.stack, offered);
+            if (request == null || request.stackSize <= 0 || !bus.storePartial(request, false)) {
+                continue;
+            }
+            remaining -= offered;
+        }
+        return entry.amount - remaining;
+    }
+
+    private long flushPendingItemToOutputBusses(BufferedItemStack entry, long limit) {
+        long remaining = Math.min(entry.amount, Math.max(0L, limit));
+        for (boolean restrictiveOnly : new boolean[] { true, false }) {
+            for (MTEHatchOutputBus bus : mOutputBusses) {
+                if (remaining <= 0L) {
+                    break;
+                }
+                if (bus == null || !bus.isValid()
+                    || bus instanceof MTEHatchOutputBusME
+                    || restrictiveOnly && !bus.isLocked()) {
+                    continue;
+                }
+                long offered = Math.min(remaining, Math.max(1, entry.stack.getMaxStackSize()));
+                ItemStack request = copyItemAmount(entry.stack, offered);
+                if (request == null || request.stackSize <= 0) {
+                    continue;
+                }
+                long before = request.stackSize;
+                bus.storePartial(request, false);
+                remaining -= Math.max(0L, before - request.stackSize);
+            }
+        }
+        return Math.min(entry.amount, Math.max(0L, limit)) - remaining;
+    }
+
+    private long flushPendingItemToOutputHatches(BufferedItemStack entry, long limit) {
+        long remaining = Math.min(entry.amount, Math.max(0L, limit));
+        for (MTEHatchOutput hatch : mOutputHatches) {
+            if (remaining <= 0L) {
+                break;
+            }
+            if (hatch == null || !hatch.isValid() || !hatch.outputsItems()) {
+                continue;
+            }
+            ItemStack request = copyItemAmount(
+                entry.stack,
+                Math.min(remaining, Math.max(1, entry.stack.getMaxStackSize())));
+            if (request == null || request.stackSize <= 0) {
+                continue;
+            }
+            long offered = request.stackSize;
+            if (hatch.getBaseMetaTileEntity()
+                .addStackToSlot(1, request)) {
+                remaining -= offered;
+            }
+        }
+        return Math.min(entry.amount, Math.max(0L, limit)) - remaining;
+    }
+
+    private boolean hasFastItemOutputBus() {
+        for (MTEHatchOutputBus bus : mOutputBusses) {
+            if (bus instanceof MTEHatchOutputBusME && bus.isValid()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasFastFluidOutputHatch() {
+        for (MTEHatchOutput hatch : mOutputHatches) {
+            if (hatch instanceof MTEHatchOutputME && hatch.isValid()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void flushPendingFluidOutputs() {
+        Iterator<BufferedFluidStack> iterator = pendingOutputFluids.iterator();
+        while (iterator.hasNext()) {
+            BufferedFluidStack entry = iterator.next();
+            if (entry == null || entry.fluidStack == null || entry.amount <= 0L) {
+                iterator.remove();
+                continue;
+            }
+            long movedToMe = flushPendingFluidToMeHatches(entry);
+            if (movedToMe > 0L) {
+                entry.amount = Math.max(0L, entry.amount - movedToMe);
+                if (entry.amount <= 0L) {
+                    iterator.remove();
+                }
+                continue;
+            }
+            FluidStack stack = copyFluidAmount(
+                entry.fluidStack,
+                Math.min(entry.amount, MAX_OUTPUT_FLUID_FLUSH_PER_TICK));
+            int offered = stack == null ? 0 : stack.amount;
+            if (offered <= 0 || tryFlushFluidOutput(stack) <= 0) {
+                break;
+            }
+            entry.amount = Math.max(0L, entry.amount - Math.max(0, offered - stack.amount));
+            if (entry.amount <= 0L) {
+                iterator.remove();
+            }
+        }
+    }
+
+    private long flushPendingFluidToMeHatches(BufferedFluidStack entry) {
+        long remaining = entry.amount;
+        for (MTEHatchOutput hatch : mOutputHatches) {
+            if (remaining <= 0L) {
+                break;
+            }
+            if (!(hatch instanceof MTEHatchOutputME meHatch) || !hatch.isValid()
+                || !hatch.canStoreFluid(entry.fluidStack)) {
+                continue;
+            }
+            while (remaining > 0L) {
+                FluidStack request = copyFluidAmount(entry.fluidStack, Math.min(remaining, Integer.MAX_VALUE));
+                if (request == null || request.amount <= 0) {
+                    break;
+                }
+                int filled = meHatch.tryFillAE(request);
+                if (filled <= 0) {
+                    break;
+                }
+                remaining -= filled;
+                if (filled < request.amount) {
+                    break;
+                }
+            }
+        }
+        return entry.amount - remaining;
+    }
+
+    private int tryFlushFluidOutput(FluidStack stack) {
+        if (stack == null || stack.amount <= 0) {
+            return 0;
+        }
+        int filled = fillOutputHatches(stack, true);
+        if (stack.amount > 0) {
+            filled += fillOutputHatches(stack, false);
+        }
+        return filled;
+    }
+
+    private int fillOutputHatches(FluidStack stack, boolean restrictiveOnly) {
+        int filled = 0;
+        for (MTEHatchOutput hatch : mOutputHatches) {
+            if (stack == null || stack.amount <= 0) {
+                break;
+            }
+            if (hatch == null || !hatch.isValid() || restrictiveOnly && hatch.mMode == 0) {
+                continue;
+            }
+            if (!hatch.canStoreFluid(stack)) {
+                continue;
+            }
+            FluidStack request = stack.copy();
+            int accepted = hatch.fill(request, false);
+            if (accepted <= 0) {
+                continue;
+            }
+            request.amount = Math.min(stack.amount, accepted);
+            int actual = hatch.fill(request, true);
+            if (actual <= 0) {
+                continue;
+            }
+            stack.amount -= actual;
+            filled += actual;
+        }
+        return filled;
+    }
+
     private void resetPendingRecipeState() {
         wirelessRecipeRunning = false;
         lastWirelessCalculatedEut = 0L;
         lastWirelessBaseDuration = 0;
         lastAppliedOverclocks = 0;
+        lastPowerLossParallel = 1;
+        lastPowerLossRecipeSummary = "";
         lEUt = 0L;
         mEUt = 0;
         mOutputItems = null;
@@ -2321,6 +2828,40 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         return (int) Math.min(upperBound, Math.min(Integer.MAX_VALUE, byPower));
     }
 
+    private int clampOutputParallel(GTRecipe recipe, int requestedParallel) {
+        if (recipe == null || requestedParallel <= 0) {
+            return 0;
+        }
+        boolean fastItemOutput = hasFastItemOutputBus();
+        boolean fastFluidOutput = hasFastFluidOutputHatch();
+        if (fastItemOutput && fastFluidOutput) {
+            return requestedParallel;
+        }
+        long allowed = requestedParallel;
+        int[] probes = new int[] { requestedParallel, Math.max(1, requestedParallel / 2),
+            Math.max(1, requestedParallel / 4), Math.max(1, requestedParallel / 8), Math.max(1, requestedParallel / 16),
+            Math.max(1, requestedParallel / 32), Math.max(1, requestedParallel / 64) };
+        for (int probe : probes) {
+            if (probe <= 0) {
+                continue;
+            }
+            ItemStack[] items = fastItemOutput ? null
+                : transformItems(ProxyRecipeExecutor.buildRawItemOutputs(recipe, probe));
+            FluidStack[] fluids = fastFluidOutput ? null
+                : transformFluids(ProxyRecipeExecutor.buildRawFluidOutputs(recipe, probe));
+            if (!canOutputSafely(items, fluids)) {
+                continue;
+            }
+            allowed = Math.min(allowed, probe);
+        }
+        if (allowed > 1 && !canOutputSafely(
+            fastItemOutput ? null : transformItems(ProxyRecipeExecutor.buildRawItemOutputs(recipe, 1)),
+            fastFluidOutput ? null : transformFluids(ProxyRecipeExecutor.buildRawFluidOutputs(recipe, 1)))) {
+            return 0;
+        }
+        return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, allowed));
+    }
+
     private boolean canSupplyExecutionPlan(ProxyRecipeExecutionPlan plan) {
         if (plan == null) {
             return false;
@@ -2364,6 +2905,57 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
 
     private String tr(String key) {
         return StatCollector.translateToLocal(key);
+    }
+
+    private NBTTagList writeItemList(List<BufferedItemStack> items) {
+        NBTTagList list = new NBTTagList();
+        for (BufferedItemStack entry : items) {
+            if (entry != null && entry.stack != null && entry.amount > 0L) {
+                NBTTagCompound tag = entry.stack.writeToNBT(new NBTTagCompound());
+                tag.setLong("BufferedAmount", entry.amount);
+                list.appendTag(tag);
+            }
+        }
+        return list;
+    }
+
+    private void readItemList(NBTTagList list, List<BufferedItemStack> target) {
+        target.clear();
+        for (int i = 0; i < list.tagCount(); i++) {
+            NBTTagCompound tag = list.getCompoundTagAt(i);
+            ItemStack stack = ItemStack.loadItemStackFromNBT(tag);
+            if (stack != null && stack.stackSize > 0) {
+                long amount = tag.hasKey("BufferedAmount", Constants.NBT.TAG_LONG) ? tag.getLong("BufferedAmount")
+                    : stack.stackSize;
+                ProcessBufferUtil
+                    .addItem(target, stack, amount, (left, right) -> GTUtility.areStacksEqual(left, right, true));
+            }
+        }
+    }
+
+    private NBTTagList writeFluidList(List<BufferedFluidStack> fluids) {
+        NBTTagList list = new NBTTagList();
+        for (BufferedFluidStack entry : fluids) {
+            if (entry != null && entry.fluidStack != null && entry.amount > 0L) {
+                NBTTagCompound tag = entry.fluidStack.writeToNBT(new NBTTagCompound());
+                tag.setLong("BufferedAmount", entry.amount);
+                list.appendTag(tag);
+            }
+        }
+        return list;
+    }
+
+    private void readFluidList(NBTTagList list, List<BufferedFluidStack> target) {
+        target.clear();
+        for (int i = 0; i < list.tagCount(); i++) {
+            NBTTagCompound tag = list.getCompoundTagAt(i);
+            FluidStack stack = FluidStack.loadFluidStackFromNBT(tag);
+            if (stack != null && stack.amount > 0) {
+                long amount = tag.hasKey("BufferedAmount", Constants.NBT.TAG_LONG) ? tag.getLong("BufferedAmount")
+                    : stack.amount;
+                ProcessBufferUtil.addFluid(target, stack, amount);
+            }
+        }
     }
 
     private ItemStack[] normalizeLiveItemRefs(List<ItemStack> liveItems) {
@@ -2424,9 +3016,9 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         return merged.isEmpty() ? GTValues.emptyItemStackArray : merged.toArray(new ItemStack[0]);
     }
 
-    private ItemStack[] buildMachineManagedQueryItems(ItemStack[] liveItemArray) {
+    private ItemStack[] buildMachineManagedQueryItems(ItemStack[] liveItemArray, List<ItemStack> storedInputs) {
         ArrayList<ItemStack> queryOnlyMarkers = new ArrayList<>();
-        for (ItemStack stack : normalizeMachineManagedItemMarkers(getStoredInputs())) {
+        for (ItemStack stack : normalizeMachineManagedItemMarkers(storedInputs)) {
             addQueryMarker(queryOnlyMarkers, stack);
         }
         if (queryOnlyMarkers.isEmpty()) {

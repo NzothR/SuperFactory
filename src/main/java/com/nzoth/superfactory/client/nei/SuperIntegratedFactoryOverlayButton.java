@@ -1,5 +1,6 @@
 package com.nzoth.superfactory.client.nei;
 
+import java.lang.reflect.Field;
 import java.util.List;
 
 import net.minecraft.client.Minecraft;
@@ -27,6 +28,7 @@ import gregtech.api.enums.Materials;
 import gregtech.api.util.GTOreDictUnificator;
 import gregtech.api.util.GTRecipe;
 import gregtech.api.util.GTUtility;
+import gregtech.common.blocks.ItemMachines;
 import gregtech.nei.GTNEIDefaultHandler;
 import tectech.recipe.EyeOfHarmonyRecipe;
 import tectech.util.FluidStackLong;
@@ -105,15 +107,23 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         ItemStackHandler inputHandler = new ItemStackHandler(ProcessNode.INPUT_SLOTS);
         ItemStackHandler outputHandler = new ItemStackHandler(ProcessNode.OUTPUT_SLOTS);
         ItemStackHandler nonConsumableHandler = new ItemStackHandler(ProcessNode.NON_CONSUMABLE_SLOTS);
-        fillConsumableInputsFromPositionedStacks(inputHandler, cached.mInputs, cached.mRecipe.mInputs);
+        fillConsumableInputsFromPositionedStacks(
+            inputHandler,
+            nonConsumableHandler,
+            cached.mInputs,
+            cached.mRecipe.mInputs,
+            cached.mRecipe.mFakeRecipe);
         fillHandlerWithFluids(inputHandler, effectiveFluidInputs(cached.mRecipe));
         ItemStack[] itemOutputs = effectiveItemOutputs(cached.mRecipe);
         FluidStack[] fluidOutputs = effectiveFluidOutputs(cached.mRecipe);
         fillHandler(outputHandler, itemOutputs);
         fillHandlerWithFluids(outputHandler, fluidOutputs);
-        fillNonConsumables(nonConsumableHandler, cached);
-        NBTTagList inputVariants = buildInputVariantsTag(cached.mInputs, cached.mRecipe.mInputs);
-        int[] outputChances = buildOutputChances(outputHandler, cached.mRecipe, itemOutputs);
+        fillNonConsumables(nonConsumableHandler, cached, cached.mRecipe.mFakeRecipe);
+        NBTTagList inputVariants = buildInputVariantsTag(
+            cached.mInputs,
+            cached.mRecipe.mInputs,
+            cached.mRecipe.mFakeRecipe);
+        int[] outputChances = buildOutputChances(outputHandler, cached.mOutputs, cached.mRecipe, itemOutputs);
         int duration = effectiveDuration(cached.mRecipe);
         long euPerTick = effectiveEuPerTick(cached.mRecipe, duration);
 
@@ -125,8 +135,15 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         tag.setTag("NonConsumables", nonConsumableHandler.serializeNBT());
         tag.setInteger("DurationTicks", duration);
         tag.setLong("EUt", euPerTick);
-        tag.setString("RecipeHandlerName", handler.getRecipeName());
-        tag.setString("RecipeMapName", handler.getRecipeMap().unlocalizedName);
+        tag.setString(
+            "RecipeHandlerName",
+            cached.mRecipe.mFakeRecipe
+                ? net.minecraft.util.StatCollector.translateToLocal(ProcessNode.FAKE_RECIPE_PROXY_HOST + ".name")
+                : handler.getRecipeName());
+        tag.setString(
+            "RecipeMapName",
+            cached.mRecipe.mFakeRecipe ? ProcessNode.FAKE_RECIPE_PROXY_HOST : handler.getRecipeMap().unlocalizedName);
+        tag.setBoolean("FakeRecipeSnapshot", cached.mRecipe.mFakeRecipe);
         tag.setString(
             "RecipeFingerprint",
             buildRecipeFingerprint(
@@ -136,10 +153,14 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
                 outputChances,
                 inputVariants,
                 duration,
-                euPerTick));
+                euPerTick,
+                cached.mRecipe.mFakeRecipe));
+        if (cached.mRecipe.mFakeRecipe) {
+            tag.setTag("VirtualRecipeSnapshot", tag.copy());
+        }
 
         List<PositionedStack> catalysts = RecipeCatalysts.getRecipeCatalysts(handler);
-        if (!catalysts.isEmpty() && catalysts.get(0).item != null) {
+        if (!cached.mRecipe.mFakeRecipe && !catalysts.isEmpty() && catalysts.get(0).item != null) {
             tag.setTag("Machine", catalysts.get(0).item.writeToNBT(new NBTTagCompound()));
         }
         return tag;
@@ -161,6 +182,11 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
 
     private static void fillConsumableInputsFromPositionedStacks(ItemStackHandler handler, List<PositionedStack> stacks,
         ItemStack[] recipeInputs) {
+        fillConsumableInputsFromPositionedStacks(handler, null, stacks, recipeInputs, false);
+    }
+
+    private static void fillConsumableInputsFromPositionedStacks(ItemStackHandler handler,
+        ItemStackHandler nonConsumables, List<PositionedStack> stacks, ItemStack[] recipeInputs, boolean fakeRecipe) {
         int slot = firstEmptySlot(handler);
         for (PositionedStack positionedStack : stacks) {
             if (slot >= handler.getSlots()) {
@@ -168,7 +194,15 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             }
             if (positionedStack == null || positionedStack.item == null
                 || isFluidDisplay(positionedStack.item)
-                || isLikelyNonConsumable(positionedStack.item, recipeInputs)) {
+                || isLikelyNonConsumable(positionedStack.item, recipeInputs)
+                || fakeRecipe && isFakeRecipeNonConsumable(positionedStack, recipeInputs)) {
+                if (fakeRecipe && nonConsumables != null
+                    && positionedStack != null
+                    && positionedStack.item != null
+                    && !isFluidDisplay(positionedStack.item)
+                    && isFakeRecipeNonConsumable(positionedStack, recipeInputs)) {
+                    addUniqueStack(nonConsumables, positionedStack.item);
+                }
                 continue;
             }
             ItemStack copy = positionedStack.item.copy();
@@ -289,6 +323,11 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
     }
 
     private static void fillNonConsumables(ItemStackHandler handler, GTNEIDefaultHandler.CachedDefaultRecipe cached) {
+        fillNonConsumables(handler, cached, false);
+    }
+
+    private static void fillNonConsumables(ItemStackHandler handler, GTNEIDefaultHandler.CachedDefaultRecipe cached,
+        boolean fakeRecipe) {
         Object specialItems = cached.mRecipe.mSpecialItems;
         if (specialItems instanceof ItemStack stack) {
             addUniqueStack(handler, stack);
@@ -297,7 +336,7 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             fillHandler(handler, stacks);
         }
         fillZeroAmountInputs(handler, cached.mRecipe.mInputs);
-        fillNonConsumablesFromPositionedStacks(handler, cached.mInputs, cached.mRecipe.mInputs);
+        fillNonConsumablesFromPositionedStacks(handler, cached.mInputs, cached.mRecipe.mInputs, fakeRecipe);
     }
 
     private static ItemStack[] consumableInputs(ItemStack[] stacks) {
@@ -357,6 +396,11 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
     }
 
     private static NBTTagList buildInputVariantsTag(List<PositionedStack> stacks, ItemStack[] recipeInputs) {
+        return buildInputVariantsTag(stacks, recipeInputs, false);
+    }
+
+    private static NBTTagList buildInputVariantsTag(List<PositionedStack> stacks, ItemStack[] recipeInputs,
+        boolean fakeRecipe) {
         NBTTagList list = new NBTTagList();
         if (stacks == null) {
             return list;
@@ -366,7 +410,8 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             if (positionedStack == null || positionedStack.item == null) {
                 continue;
             }
-            if (isFluidDisplay(positionedStack.item) || isLikelyNonConsumable(positionedStack.item, recipeInputs)) {
+            if (isFluidDisplay(positionedStack.item) || isLikelyNonConsumable(positionedStack.item, recipeInputs)
+                || fakeRecipe && isFakeRecipeNonConsumable(positionedStack, recipeInputs)) {
                 continue;
             }
             int inputSlot = slot++;
@@ -425,26 +470,50 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         return 0;
     }
 
-    private static int[] buildOutputChances(ItemStackHandler outputs, GTRecipe recipe, ItemStack[] itemOutputs) {
+    private static int[] buildOutputChances(ItemStackHandler outputs, List<PositionedStack> neiOutputs, GTRecipe recipe,
+        ItemStack[] itemOutputs) {
         int[] chances = new int[ProcessNode.OUTPUT_SLOTS];
         java.util.Arrays.fill(chances, 10000);
-        if (getEyeOfHarmonyRecipe(recipe) != null || recipe == null || recipe.mChances == null) {
+        if (getEyeOfHarmonyRecipe(recipe) != null || recipe == null) {
             return chances;
         }
         boolean[] usedSlots = new boolean[outputs.getSlots()];
-        for (int recipeOutput = 0; recipeOutput < itemOutputs.length
-            && recipeOutput < recipe.mChances.length; recipeOutput++) {
+        for (int recipeOutput = 0; recipeOutput < itemOutputs.length; recipeOutput++) {
             ItemStack stack = itemOutputs[recipeOutput];
             if (stack == null) {
                 continue;
             }
             int slot = findMatchingOutputSlot(outputs, stack, usedSlots);
             if (slot >= 0) {
-                chances[slot] = normalizeRecipeChance(recipe.mChances[recipeOutput]);
+                chances[slot] = normalizeRecipeChance(outputChanceFromNei(neiOutputs, recipeOutput, recipe));
                 usedSlots[slot] = true;
             }
         }
         return chances;
+    }
+
+    private static int outputChanceFromNei(List<PositionedStack> neiOutputs, int outputIndex, GTRecipe recipe) {
+        if (neiOutputs != null && outputIndex >= 0 && outputIndex < neiOutputs.size()) {
+            Integer chance = positionedStackChance(neiOutputs.get(outputIndex));
+            if (chance != null && chance > 0) {
+                return chance;
+            }
+        }
+        return recipe.getOutputChance(outputIndex);
+    }
+
+    private static Integer positionedStackChance(PositionedStack positionedStack) {
+        if (positionedStack == null) {
+            return null;
+        }
+        try {
+            Field field = positionedStack.getClass()
+                .getDeclaredField("mChance");
+            field.setAccessible(true);
+            return field.getInt(positionedStack);
+        } catch (ReflectiveOperationException | SecurityException ignored) {
+            return null;
+        }
     }
 
     private static int normalizeRecipeChance(int chance) {
@@ -469,8 +538,10 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
     }
 
     private static String buildRecipeFingerprint(ItemStackHandler inputs, ItemStackHandler outputs,
-        ItemStackHandler nonConsumables, int[] outputChances, NBTTagList inputVariants, int duration, long euPerTick) {
+        ItemStackHandler nonConsumables, int[] outputChances, NBTTagList inputVariants, int duration, long euPerTick,
+        boolean fakeRecipe) {
         ProcessNode node = new ProcessNode(0, 0, 0);
+        node.fakeRecipeSnapshot = fakeRecipe;
         node.inputHandler.deserializeNBT(inputs.serializeNBT());
         node.outputHandler.deserializeNBT(outputs.serializeNBT());
         node.nonConsumableHandler.deserializeNBT(nonConsumables.serializeNBT());
@@ -493,14 +564,34 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
 
     private static void fillNonConsumablesFromPositionedStacks(ItemStackHandler handler, List<PositionedStack> stacks,
         ItemStack[] recipeInputs) {
+        fillNonConsumablesFromPositionedStacks(handler, stacks, recipeInputs, false);
+    }
+
+    private static void fillNonConsumablesFromPositionedStacks(ItemStackHandler handler, List<PositionedStack> stacks,
+        ItemStack[] recipeInputs, boolean fakeRecipe) {
         for (PositionedStack positionedStack : stacks) {
             if (positionedStack == null || positionedStack.item == null) {
                 continue;
             }
-            if (isLikelyNonConsumable(positionedStack.item, recipeInputs)) {
+            if (isLikelyNonConsumable(positionedStack.item, recipeInputs)
+                || fakeRecipe && isFakeRecipeNonConsumable(positionedStack, recipeInputs)) {
                 addUniqueStack(handler, positionedStack.item);
             }
         }
+    }
+
+    private static boolean isFakeRecipeNonConsumable(PositionedStack positionedStack, ItemStack[] recipeInputs) {
+        if (positionedStack == null || positionedStack.item == null || isFluidDisplay(positionedStack.item)) {
+            return false;
+        }
+        if (isMachineStack(positionedStack.item)) {
+            return true;
+        }
+        return positionedStack.rely < 18 && matchesAnyInputType(positionedStack.item, recipeInputs);
+    }
+
+    private static boolean isMachineStack(ItemStack stack) {
+        return stack != null && stack.getItem() instanceof ItemMachines;
     }
 
     private static void addUniqueStack(ItemStackHandler handler, ItemStack stack) {
@@ -532,6 +623,18 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             }
         }
         return true;
+    }
+
+    private static boolean matchesAnyInputType(ItemStack stack, ItemStack[] recipeInputs) {
+        if (stack == null || recipeInputs == null) {
+            return false;
+        }
+        for (ItemStack input : recipeInputs) {
+            if (input != null && matchesConsumableType(input, stack)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isFluidDisplay(ItemStack stack) {

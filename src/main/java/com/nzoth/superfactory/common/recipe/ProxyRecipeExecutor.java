@@ -9,7 +9,6 @@ import net.minecraftforge.fluids.FluidStack;
 
 import gregtech.api.util.GTRecipe;
 import gregtech.api.util.OverclockCalculator;
-import gregtech.api.util.ParallelHelper;
 
 public final class ProxyRecipeExecutor {
 
@@ -166,8 +165,8 @@ public final class ProxyRecipeExecutor {
                 continue;
             }
             int chance = i < chances.length ? chances[i] : 10000;
-            long multiplier = ParallelHelper.calculateIntegralChancedOutputMultiplier(chance, parallel);
-            ParallelHelper.addItemsLong(out, output, (long) output.stackSize * multiplier);
+            long multiplier = calculateIntegralChancedOutputMultiplier(chance, parallel);
+            addItemCompact(out, output, safeMultiply(output.stackSize, multiplier));
         }
         return out.isEmpty() ? null : out.toArray(new ItemStack[0]);
     }
@@ -182,9 +181,45 @@ public final class ProxyRecipeExecutor {
             if (output == null || output.amount <= 0) {
                 continue;
             }
-            ParallelHelper.addFluidsLong(out, output, (long) output.amount * parallel);
+            addFluidCompact(out, output, safeMultiply(output.amount, parallel));
         }
         return out.isEmpty() ? null : out.toArray(new FluidStack[0]);
+    }
+
+    private static long calculateIntegralChancedOutputMultiplier(int chance, int parallel) {
+        if (chance <= 0 || parallel <= 0) {
+            return 0L;
+        }
+        if (chance >= 10000) {
+            return parallel;
+        }
+        return safeMultiply(parallel, chance) / 10000L;
+    }
+
+    private static void addItemCompact(ArrayList<ItemStack> out, ItemStack template, long amount) {
+        if (template == null || amount <= 0L) {
+            return;
+        }
+        long remaining = amount;
+        while (remaining > 0L) {
+            ItemStack copy = template.copy();
+            copy.stackSize = (int) Math.min(Integer.MAX_VALUE, remaining);
+            out.add(copy);
+            remaining -= copy.stackSize;
+        }
+    }
+
+    private static void addFluidCompact(ArrayList<FluidStack> out, FluidStack template, long amount) {
+        if (template == null || amount <= 0L) {
+            return;
+        }
+        long remaining = amount;
+        while (remaining > 0L) {
+            FluidStack copy = template.copy();
+            copy.amount = (int) Math.min(Integer.MAX_VALUE, remaining);
+            out.add(copy);
+            remaining -= copy.amount;
+        }
     }
 
     private static int scaleIntCeil(int value, int numerator, int denominator) {

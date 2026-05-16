@@ -19,6 +19,7 @@ import net.minecraft.client.renderer.entity.RenderItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.CompressedStreamTools;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.EnumChatFormatting;
 import net.minecraft.util.StatCollector;
 import net.minecraftforge.fluids.FluidStack;
@@ -29,6 +30,7 @@ import org.lwjgl.opengl.GL11;
 import com.gtnewhorizons.modularui.api.forge.ItemStackHandler;
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
 import com.nzoth.superfactory.common.network.MessageExportProcessRawMaterials;
+import com.nzoth.superfactory.common.network.MessageRestoreSubmittedProcessGraph;
 import com.nzoth.superfactory.common.network.MessageSubmitProcessRequirements;
 import com.nzoth.superfactory.common.network.MessageUpdateProcessGraph;
 import com.nzoth.superfactory.common.network.NetworkLoader;
@@ -204,6 +206,14 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         addCanvasButton(
             toolbarLeft,
             toolbarTop + 168,
+            24,
+            20,
+            "还",
+            tr("superfactory.machine.super_integrated_factory.process.restore"),
+            this::confirmRestoreSubmittedGraph);
+        addCanvasButton(
+            toolbarLeft,
+            toolbarTop + 192,
             24,
             20,
             "X",
@@ -953,6 +963,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             applyEditorFields();
             checkCurrentRecipe(false);
             if (editingNode.lastRecipeCheckPassed) {
+                fillEmptyNameFromRecipeOutput();
                 editingNode.locked = true;
                 closeNodeEditorWithoutChangingName();
             }
@@ -2263,6 +2274,18 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             showError(tr("superfactory.machine.super_integrated_factory.process.error.no_recipe_hints"));
             return;
         }
+        if (editingNode.fakeRecipeSnapshot) {
+            checkVirtualRecipeSnapshot(fillOutputs);
+            return;
+        }
+        if (editingNode.recipeFingerprint != null && !editingNode.recipeFingerprint.isEmpty()
+            && editingNode.recipeFingerprint.equals(editingNode.buildRecipeFingerprint())) {
+            editingNode.lastRecipeCheckPassed = true;
+            fillEmptyNameFromRecipeOutput();
+            refreshOpenEditorFields();
+            closeCandidateSelector();
+            return;
+        }
         List<RecipeMatchCandidate> candidates;
         try {
             candidates = findRecipeCandidates(editingNode);
@@ -2318,6 +2341,69 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return true;
     }
 
+    private void checkVirtualRecipeSnapshot(boolean fillOutputs) {
+        if (editingNode == null) {
+            return;
+        }
+        if (!validateVirtualRecipeSnapshot(editingNode, fillOutputs)) {
+            editingNode.lastRecipeCheckPassed = false;
+            closeCandidateSelector();
+            showError(
+                tr("superfactory.machine.super_integrated_factory.process.error.no_matching_recipe") + ": "
+                    + safeNodeName(editingNode));
+            return;
+        }
+        editingNode.lastRecipeCheckPassed = true;
+        editingNode.recipeFingerprint = editingNode.buildRecipeFingerprint();
+        fillEmptyNameFromRecipeOutput();
+        refreshOpenEditorFields();
+        closeCandidateSelector();
+    }
+
+    private boolean validateVirtualRecipeSnapshot(ProcessNode node, boolean fillOutputs) {
+        if (node == null || !node.fakeRecipeSnapshot || node.virtualRecipeSnapshot == null) {
+            return false;
+        }
+        VirtualRecipeSnapshot snapshot = readVirtualRecipeSnapshot(node.virtualRecipeSnapshot);
+        if (snapshot == null || !snapshot.hasOutputs()) {
+            return false;
+        }
+        if (fillOutputs || !hasProvidedOutputs(node) && !hasProvidedOutputFluids(node)) {
+            fillHandlerFromRecipe(
+                node.outputHandler,
+                gatherItemStacks(snapshot.outputs),
+                gatherFluidStacks(snapshot.outputs));
+            applySnapshotOutputChances(node.outputHandler, snapshot.outputChances, node);
+        }
+        if (!hasProvidedOutputs(node) && !hasProvidedOutputFluids(node)) {
+            return false;
+        }
+        if (!providedItemsAreContainedInRecipe(
+            gatherItemStacks(node.outputHandler),
+            gatherItemStacks(snapshot.outputs),
+            false)
+            || !providedFluidsAreContainedInRecipe(
+                gatherFluidStacks(node.outputHandler),
+                gatherFluidStacks(snapshot.outputs),
+                false)) {
+            return false;
+        }
+        normalizeExistingHandlerStacks(
+            node.outputHandler,
+            gatherItemStacks(snapshot.outputs),
+            gatherFluidStacks(snapshot.outputs));
+        applySnapshotOutputChances(snapshot.outputs, snapshot.outputChances, node);
+        fillHandlerFromRecipe(node.inputHandler, gatherItemStacks(snapshot.inputs), gatherFluidStacks(snapshot.inputs));
+        copyInputVariants(snapshot.inputVariants, node);
+        copyHandler(snapshot.nonConsumables, node.nonConsumableHandler);
+        node.recipeMapName = ProcessNode.FAKE_RECIPE_PROXY_HOST;
+        node.recipeHandlerName = tr(ProcessNode.FAKE_RECIPE_PROXY_HOST + ".name");
+        node.baseDurationTicks = snapshot.durationTicks;
+        node.baseEuPerTick = snapshot.euPerTick;
+        applyNoLossOverclock(node);
+        return true;
+    }
+
     private boolean recipeHasOutputs(RecipeMatchCandidate candidate) {
         if (candidate == null) {
             return false;
@@ -2366,7 +2452,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 if (recipe == null || recipe.mHidden || recipe.mFakeRecipe || !recipe.mEnabled) {
                     continue;
                 }
-                if (!ignoreHints && !candidateMatchesHints(node, recipe)) {
+                if (!ignoreHints && !candidateMatchesHints(node, recipeMap, recipe)) {
                     continue;
                 }
                 String groupKey = recipeGroupKey(recipeMap, recipe);
@@ -2392,7 +2478,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             recipeMap,
             recipe,
             StatCollector.translateToLocal(recipeMap.unlocalizedName),
-            recipeRatioMatches(node, recipe),
+            recipeRatioMatches(node, recipeMap, recipe),
             buildRecipeFingerprint(recipe, itemOutputs, fluidOutputs, outputChances, duration, euPerTick),
             buildRecipeInputVariantPreview(recipe, java.util.Collections.emptyList(), false),
             fluidInputs,
@@ -2407,7 +2493,9 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         ItemStack[] itemOutputs = effectiveItemOutputs(recipe);
         FluidStack[] fluidOutputs = effectiveFluidOutputs(recipe);
         return recipeMap.unlocalizedName + "|i="
-            + groupedItemKey(recipeConsumableInputs(recipe))
+            + exactGroupedItemKey(recipeConsumableInputs(recipe))
+            + "|r="
+            + System.identityHashCode(recipe)
             + "|fi="
             + groupedFluidKey(effectiveFluidInputs(recipe))
             + "|o="
@@ -2422,6 +2510,18 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             + effectiveDuration(recipe)
             + "|e="
             + effectiveEuPerTick(recipe, effectiveDuration(recipe));
+    }
+
+    private String exactGroupedItemKey(ItemStack[] stacks) {
+        List<String> parts = new ArrayList<>();
+        for (ItemStack stack : safeItems(stacks)) {
+            if (stack == null) {
+                continue;
+            }
+            parts.add(ProcessNode.stackFingerprint(stack) + "@" + Math.max(1L, getDisplayAmount(stack)));
+        }
+        parts.sort(String::compareTo);
+        return parts.toString();
     }
 
     private String groupedItemKey(ItemStack[] stacks) {
@@ -2536,7 +2636,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return false;
     }
 
-    private boolean candidateMatchesHints(ProcessNode node, GTRecipe recipe) {
+    private boolean candidateMatchesHints(ProcessNode node, RecipeMap<?> recipeMap, GTRecipe recipe) {
         return hasAnyProvidedHints(node) && (!hasProvidedInputs(node)
             || providedItemsAreContainedInRecipe(gatherInputItemStacks(node), recipeConsumableInputs(recipe), false))
             && (!hasProvidedInputFluids(node) || providedFluidsAreContainedInRecipe(
@@ -2551,11 +2651,10 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 gatherFluidStacks(node.outputHandler),
                 effectiveFluidOutputs(recipe),
                 false))
-            && (!hasProvidedNonConsumables(node)
-                || handlerContentsAreSubsetOfRecipeNonConsumables(node.nonConsumableHandler, recipe, false));
+            && nonConsumableHintsMatch(node, recipeMap, recipe, false);
     }
 
-    private boolean recipeRatioMatches(ProcessNode node, GTRecipe recipe) {
+    private boolean recipeRatioMatches(ProcessNode node, RecipeMap<?> recipeMap, GTRecipe recipe) {
         QuantityRatio ratio = new QuantityRatio();
         return hasAnyProvidedHints(node)
             && (!hasProvidedInputs(node)
@@ -2566,25 +2665,25 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 || addItemRatios(ratio, gatherItemStacks(node.outputHandler), effectiveItemOutputs(recipe)))
             && (!hasProvidedOutputFluids(node)
                 || addFluidRatios(ratio, gatherFluidStacks(node.outputHandler), effectiveFluidOutputs(recipe)))
-            && (!hasProvidedNonConsumables(node)
-                || handlerContentsAreSubsetOfRecipeNonConsumables(node.nonConsumableHandler, recipe, true))
+            && nonConsumableHintsMatch(node, recipeMap, recipe, true)
             && ratio.hasRatio();
     }
 
     private boolean recipeMatchesNodeExactly(ProcessNode node, RecipeMatchCandidate candidate) {
         GTRecipe recipe = candidate.recipe;
-        return (!hasProvidedInputs(node)
-            || itemStacksMatchRecipe(gatherInputItemStacks(node), recipeConsumableInputs(recipe), true))
+        return (!hasProvidedInputs(node) || inputStacksMatchCandidate(gatherInputItemStacks(node), candidate))
             && (!hasProvidedInputFluids(node) || normalizedFluidCounts(gatherFluidStacks(node.inputHandler))
                 .equals(normalizedFluidCounts(candidate.fluidInputs)))
             && (!hasProvidedOutputs(node)
                 || itemStacksMatchRecipe(gatherItemStacks(node.outputHandler), candidate.itemOutputs, false))
             && (!hasProvidedOutputFluids(node) || normalizedFluidCounts(gatherFluidStacks(node.outputHandler))
                 .equals(normalizedFluidCounts(candidate.fluidOutputs)))
-            && (!hasProvidedNonConsumables(node) || itemStacksMatchRecipe(
-                gatherItemStacks(node.nonConsumableHandler),
-                recipeNonConsumableStacks(recipe).toArray(new ItemStack[0]),
-                true));
+            && (!hasProvidedNonConsumables(node)
+                || isLooseNonConsumableRecipe(candidate.recipeMap) && recipeNonConsumableStacks(recipe).isEmpty()
+                || itemStacksMatchRecipe(
+                    gatherItemStacks(node.nonConsumableHandler),
+                    recipeNonConsumableStacks(recipe).toArray(new ItemStack[0]),
+                    true));
     }
 
     private boolean hasAnyProvidedHints(ProcessNode node) {
@@ -2648,6 +2747,49 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return providedCount == safeItems(recipeItems).length && remaining.isEmpty();
     }
 
+    private boolean inputStacksMatchCandidate(ItemStack[] provided, RecipeMatchCandidate candidate) {
+        List<List<ItemStack>> remaining = new ArrayList<>();
+        ItemStack[] recipeInputs = recipeConsumableInputs(candidate.recipe);
+        for (int slot = 0; slot < recipeInputs.length; slot++) {
+            List<ItemStack> variants = slot < candidate.inputVariants.size() ? candidate.inputVariants.get(slot)
+                : java.util.Collections.emptyList();
+            List<ItemStack> slotVariants = new ArrayList<>();
+            if (variants == null || variants.isEmpty()) {
+                addUniqueVariant(slotVariants, recipeInputs[slot]);
+            } else {
+                for (ItemStack variant : variants) {
+                    addUniqueVariant(slotVariants, variant);
+                }
+            }
+            remaining.add(slotVariants);
+        }
+        int providedCount = 0;
+        for (ItemStack stack : safeItems(provided)) {
+            if (stack == null) {
+                continue;
+            }
+            providedCount++;
+            int matchedIndex = findMatchingCandidateInputSlot(remaining, stack);
+            if (matchedIndex < 0) {
+                return false;
+            }
+            remaining.remove(matchedIndex);
+        }
+        return providedCount == recipeInputs.length && remaining.isEmpty();
+    }
+
+    private int findMatchingCandidateInputSlot(List<List<ItemStack>> remaining, ItemStack provided) {
+        for (int i = 0; i < remaining.size(); i++) {
+            for (ItemStack variant : remaining.get(i)) {
+                if (variant != null && getDisplayAmount(variant) == getDisplayAmount(provided)
+                    && recipeInputAcceptsProvided(variant, provided)) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
     private int findMatchingRecipeItemIndex(List<ItemStack> recipeItems, ItemStack provided, boolean allowInputVariants,
         boolean exactAmount) {
         for (int i = 0; i < recipeItems.size(); i++) {
@@ -2691,6 +2833,37 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return true;
     }
 
+    private boolean nonConsumableHintsMatch(ProcessNode node, RecipeMap<?> recipeMap, GTRecipe recipe,
+        boolean exactAmount) {
+        if (!hasProvidedNonConsumables(node)) {
+            return true;
+        }
+        if (isLooseNonConsumableRecipe(recipeMap) && recipeNonConsumableStacks(recipe).isEmpty()) {
+            return true;
+        }
+        return handlerContentsAreSubsetOfRecipeNonConsumables(node.nonConsumableHandler, recipe, exactAmount);
+    }
+
+    private boolean isLooseNonConsumableRecipe(RecipeMap<?> recipeMap) {
+        if (recipeMap == null) {
+            return false;
+        }
+        return isLooseNonConsumableRecipeName(recipeMap.unlocalizedName)
+            || isLooseNonConsumableRecipeName(StatCollector.translateToLocal(recipeMap.unlocalizedName));
+    }
+
+    private boolean isLooseNonConsumableRecipeName(String name) {
+        if (name == null) {
+            return false;
+        }
+        String normalized = name.toLowerCase(java.util.Locale.ROOT)
+            .replace(" ", "")
+            .replace("_", "")
+            .replace("-", "");
+        return normalized.contains("quantum") && normalized.contains("manipulator")
+            || normalized.contains("量子") && normalized.contains("操纵");
+    }
+
     private List<ItemStack> recipeNonConsumableStacks(GTRecipe recipe) {
         List<ItemStack> stacks = new ArrayList<>();
         if (recipe.mSpecialItems instanceof ItemStack stack) {
@@ -2725,9 +2898,13 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             normalizeExistingOutputs(candidate);
         }
         applyOutputChances(editingNode.outputHandler, candidate, editingNode);
-        fillHandlerFromNonConsumables(editingNode.nonConsumableHandler, candidate.recipe);
+        if (!recipeNonConsumableStacks(candidate.recipe).isEmpty() || !hasProvidedNonConsumables(editingNode)) {
+            fillHandlerFromNonConsumables(editingNode.nonConsumableHandler, candidate.recipe);
+        }
         editingNode.recipeMapName = candidate.recipeMap.unlocalizedName;
         editingNode.recipeHandlerName = StatCollector.translateToLocal(candidate.recipeMap.unlocalizedName);
+        editingNode.fakeRecipeSnapshot = false;
+        editingNode.virtualRecipeSnapshot = null;
         applyRecipeTiming(candidate);
         editingNode.recipeFingerprint = editingNode.buildRecipeFingerprint();
         editingNode.lastRecipeCheckPassed = true;
@@ -3039,6 +3216,61 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         }
     }
 
+    private VirtualRecipeSnapshot readVirtualRecipeSnapshot(NBTTagCompound tag) {
+        if (tag == null || tag.hasNoTags()) {
+            return null;
+        }
+        VirtualRecipeSnapshot snapshot = new VirtualRecipeSnapshot();
+        snapshot.inputs.deserializeNBT(tag.getCompoundTag("Inputs"));
+        snapshot.outputs.deserializeNBT(tag.getCompoundTag("Outputs"));
+        snapshot.nonConsumables.deserializeNBT(tag.getCompoundTag("NonConsumables"));
+        snapshot.inputVariants = tag.hasKey("InputVariants", net.minecraftforge.common.util.Constants.NBT.TAG_LIST)
+            ? tag.getTagList("InputVariants", net.minecraftforge.common.util.Constants.NBT.TAG_COMPOUND)
+            : new NBTTagList();
+        snapshot.outputChances = tag.hasKey("OutputChances", net.minecraftforge.common.util.Constants.NBT.TAG_INT_ARRAY)
+            ? tag.getIntArray("OutputChances")
+            : new int[0];
+        snapshot.durationTicks = Math.max(0, tag.getInteger("DurationTicks"));
+        snapshot.euPerTick = Math.max(0L, tag.getLong("EUt"));
+        return snapshot;
+    }
+
+    private void copyHandler(ItemStackHandler source, ItemStackHandler target) {
+        for (int slot = 0; slot < target.getSlots(); slot++) {
+            ItemStack stack = slot < source.getSlots() ? source.getStackInSlot(slot) : null;
+            target.setStackInSlot(slot, stack == null ? null : stack.copy());
+        }
+    }
+
+    private void copyInputVariants(NBTTagList inputVariants, ProcessNode node) {
+        clearAllInputVariants(node);
+        if (inputVariants == null) {
+            return;
+        }
+        for (int i = 0; i < inputVariants.tagCount(); i++) {
+            NBTTagCompound variantTag = inputVariants.getCompoundTagAt(i);
+            int slot = Math.max(0, Math.min(ProcessNode.INPUT_SLOTS - 1, variantTag.getInteger("Slot")));
+            node.inputVariants[slot].readFromNBT(variantTag);
+        }
+    }
+
+    private void applySnapshotOutputChances(ItemStackHandler snapshotOutputs, int[] snapshotChances, ProcessNode node) {
+        node.resetOutputChances();
+        boolean[] usedSlots = new boolean[node.outputHandler.getSlots()];
+        for (int snapshotSlot = 0; snapshotSlot < snapshotOutputs.getSlots()
+            && snapshotSlot < snapshotChances.length; snapshotSlot++) {
+            ItemStack stack = snapshotOutputs.getStackInSlot(snapshotSlot);
+            if (stack == null) {
+                continue;
+            }
+            int nodeSlot = findMatchingOutputSlot(node.outputHandler, stack, usedSlots);
+            if (nodeSlot >= 0) {
+                node.setOutputChance(nodeSlot, snapshotChances[snapshotSlot]);
+                usedSlots[nodeSlot] = true;
+            }
+        }
+    }
+
     private void clearAllInputVariants(ProcessNode node) {
         for (int i = 0; i < ProcessNode.INPUT_SLOTS; i++) {
             node.clearInputVariants(i);
@@ -3287,11 +3519,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     private int[] effectiveOutputChances(GTRecipe recipe, int itemOutputCount) {
         int[] chances = new int[Math.max(0, itemOutputCount)];
         java.util.Arrays.fill(chances, 10000);
-        if (getEyeOfHarmonyRecipe(recipe) != null || recipe == null || recipe.mChances == null) {
+        if (getEyeOfHarmonyRecipe(recipe) != null || recipe == null) {
             return chances;
         }
-        for (int i = 0; i < chances.length && i < recipe.mChances.length; i++) {
-            chances[i] = normalizeRecipeChance(recipe.mChances[i]);
+        for (int i = 0; i < chances.length; i++) {
+            chances[i] = normalizeRecipeChance(recipe.getOutputChance(i));
         }
         return chances;
     }
@@ -3367,6 +3599,26 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             this.outputChances = outputChances == null ? new int[0] : outputChances;
             this.durationTicks = durationTicks;
             this.euPerTick = euPerTick;
+        }
+    }
+
+    private static final class VirtualRecipeSnapshot {
+
+        private final ItemStackHandler inputs = new ItemStackHandler(ProcessNode.INPUT_SLOTS);
+        private final ItemStackHandler outputs = new ItemStackHandler(ProcessNode.OUTPUT_SLOTS);
+        private final ItemStackHandler nonConsumables = new ItemStackHandler(ProcessNode.NON_CONSUMABLE_SLOTS);
+        private NBTTagList inputVariants = new NBTTagList();
+        private int[] outputChances = new int[0];
+        private int durationTicks;
+        private long euPerTick;
+
+        private boolean hasOutputs() {
+            for (int i = 0; i < outputs.getSlots(); i++) {
+                if (outputs.getStackInSlot(i) != null) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
@@ -3650,6 +3902,34 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                     result.requirements.writeToNBT()));
         }
         closeGui();
+    }
+
+    private void confirmRestoreSubmittedGraph() {
+        openConfirmDialog(
+            tr("superfactory.machine.super_integrated_factory.restore.title"),
+            tr("superfactory.machine.super_integrated_factory.restore.confirm"),
+            this::restoreSubmittedGraph);
+    }
+
+    private void restoreSubmittedGraph() {
+        NBTTagCompound snapshot = factory.getSubmittedProcessGraphSnapshotTag();
+        if (snapshot == null || snapshot.getTagList("Nodes", net.minecraftforge.common.util.Constants.NBT.TAG_COMPOUND)
+            .tagCount() == 0) {
+            showError(tr("superfactory.machine.super_integrated_factory.restore.empty"));
+            return;
+        }
+        graph.readFromNBT(snapshot);
+        editorOpen = false;
+        editingNode = null;
+        closeCandidateSelector();
+        closeImportSelector();
+        closeExportDialog();
+        syncGraph();
+        if (factory.getBaseMetaTileEntity() != null) {
+            NetworkLoader.INSTANCE
+                .sendToServer(new MessageRestoreSubmittedProcessGraph(factory.getBaseMetaTileEntity()));
+        }
+        showStatus(tr("superfactory.machine.super_integrated_factory.restore.success"), 0xFF75D17C);
     }
 
     private void exportRawMaterials() {
@@ -4654,11 +4934,23 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 node.locked = true;
                 continue;
             }
+            if (node.fakeRecipeSnapshot) {
+                editingNode = node;
+                if (!validateVirtualRecipeSnapshot(node, false)) {
+                    editingNode = previousEditingNode;
+                    editorOpen = previousEditorOpen;
+                    return false;
+                }
+                node.lastRecipeCheckPassed = true;
+                node.recipeFingerprint = node.buildRecipeFingerprint();
+                node.locked = true;
+                continue;
+            }
             editingNode = node;
             List<RecipeMatchCandidate> candidates = findRecipeCandidates(node);
             RecipeMatchCandidate selected = null;
             for (RecipeMatchCandidate candidate : candidates) {
-                if (recipeRatioMatches(node, candidate.recipe)) {
+                if (recipeRatioMatches(node, candidate.recipeMap, candidate.recipe)) {
                     selected = candidate;
                     break;
                 }
@@ -4869,7 +5161,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             applyEditorFields();
             if (editingNode.name == null || editingNode.name.trim()
                 .isEmpty()) {
-                editingNode.name = defaultNodeName(editingNode);
+                fillEmptyNameFromRecipeOutput();
+                if (editingNode.name == null || editingNode.name.trim()
+                    .isEmpty()) {
+                    editingNode.name = defaultNodeName(editingNode);
+                }
                 syncGraph();
             }
         }

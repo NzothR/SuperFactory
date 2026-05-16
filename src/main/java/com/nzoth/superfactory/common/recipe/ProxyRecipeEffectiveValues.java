@@ -78,11 +78,11 @@ public final class ProxyRecipeEffectiveValues {
     public static int[] itemOutputChances(GTRecipe recipe, int itemOutputCount) {
         int[] chances = new int[Math.max(0, itemOutputCount)];
         Arrays.fill(chances, 10000);
-        if (recipe == null || recipe.mChances == null || isEyeOfHarmony(recipe)) {
+        if (recipe == null || isEyeOfHarmony(recipe)) {
             return chances;
         }
-        for (int i = 0; i < chances.length && i < recipe.mChances.length; i++) {
-            chances[i] = Math.max(0, Math.min(10000, recipe.mChances[i]));
+        for (int i = 0; i < chances.length; i++) {
+            chances[i] = Math.max(0, Math.min(10000, recipe.getOutputChance(i)));
         }
         return chances;
     }

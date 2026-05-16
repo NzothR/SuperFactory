@@ -27,6 +27,7 @@ public final class ProcessNode {
     public static final String DISPLAY_AMOUNT_KEY = "SuperFactoryDisplayAmount";
     public static final int TYPE_NORMAL = 0;
     public static final int TYPE_RECYCLER = 1;
+    public static final String FAKE_RECIPE_PROXY_HOST = "superfactory.machine.super_proxy_factory";
 
     public final int id;
     public int x;
@@ -48,6 +49,8 @@ public final class ProcessNode {
     public String recipeMapName = "";
     public String recipeFingerprint = "";
     public String estimatedOutputLine = "";
+    public boolean fakeRecipeSnapshot;
+    public NBTTagCompound virtualRecipeSnapshot;
     public boolean lastRecipeCheckPassed;
     public final int[] outputChances = new int[OUTPUT_SLOTS];
     public final InputVariantState[] inputVariants = new InputVariantState[INPUT_SLOTS];
@@ -91,6 +94,10 @@ public final class ProcessNode {
         tag.setString("RecipeMapName", recipeMapName == null ? "" : recipeMapName);
         tag.setString("RecipeFingerprint", recipeFingerprint == null ? "" : recipeFingerprint);
         tag.setString("EstimatedOutputLine", estimatedOutputLine == null ? "" : estimatedOutputLine);
+        tag.setBoolean("FakeRecipeSnapshot", fakeRecipeSnapshot);
+        if (virtualRecipeSnapshot != null) {
+            tag.setTag("VirtualRecipeSnapshot", virtualRecipeSnapshot.copy());
+        }
         tag.setBoolean("LastRecipeCheckPassed", lastRecipeCheckPassed);
         NBTTagList outputChanceList = new NBTTagList();
         for (int i = 0; i < outputChances.length; i++) {
@@ -136,6 +143,10 @@ public final class ProcessNode {
         node.recipeMapName = tag.getString("RecipeMapName");
         node.recipeFingerprint = tag.getString("RecipeFingerprint");
         node.estimatedOutputLine = tag.getString("EstimatedOutputLine");
+        node.fakeRecipeSnapshot = tag.getBoolean("FakeRecipeSnapshot");
+        if (tag.hasKey("VirtualRecipeSnapshot", Constants.NBT.TAG_COMPOUND)) {
+            node.virtualRecipeSnapshot = tag.getCompoundTag("VirtualRecipeSnapshot");
+        }
         node.lastRecipeCheckPassed = tag.getBoolean("LastRecipeCheckPassed");
         if (tag.hasKey("OutputChances", Constants.NBT.TAG_INT_ARRAY)) {
             int[] chances = tag.getIntArray("OutputChances");
@@ -248,6 +259,8 @@ public final class ProcessNode {
         return "type=" + nodeType
             + ";scrapbox="
             + recyclerOutputsScrapbox
+            + ";fake="
+            + fakeRecipeSnapshot
             + ";t="
             + durationTicks
             + ";e="

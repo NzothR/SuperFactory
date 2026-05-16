@@ -36,6 +36,11 @@ public final class NetworkLoader {
             nextId++,
             Side.SERVER);
         INSTANCE.registerMessage(
+            MessageRestoreSubmittedProcessGraph.Handler.class,
+            MessageRestoreSubmittedProcessGraph.class,
+            nextId++,
+            Side.SERVER);
+        INSTANCE.registerMessage(
             MessageProcessCanvasStatus.Handler.class,
             MessageProcessCanvasStatus.class,
             nextId++,

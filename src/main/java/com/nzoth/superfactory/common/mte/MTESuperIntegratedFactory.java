@@ -88,6 +88,7 @@ import com.nzoth.superfactory.common.process.runtime.ProcessRuntimeMath;
 import com.nzoth.superfactory.common.process.runtime.RuntimeRouteResolver;
 import com.nzoth.superfactory.common.process.schedule.IntegratedFactoryScheduler;
 import com.nzoth.superfactory.common.process.schedule.NodeCandidate;
+import com.nzoth.superfactory.common.process.submit.IntegratedFactoryUnloadHandler;
 import com.nzoth.superfactory.common.ui.canvas.CanvasWidget;
 import com.nzoth.superfactory.common.ui.widget.RecipePatternSlotWidget;
 
@@ -312,6 +313,94 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         @Override
         public boolean hasIncomingEdge(int nodeId) {
             return MTESuperIntegratedFactory.this.hasIncomingEdge(nodeId);
+        }
+    };
+    private final IntegratedFactoryUnloadHandler.Context unloadContext = new IntegratedFactoryUnloadHandler.Context() {
+
+        @Override
+        public void discardRunningJobsWithLoss() {
+            MTESuperIntegratedFactory.this.discardRunningJobsWithLoss();
+        }
+
+        @Override
+        public void flushOutputBuffers() {
+            MTESuperIntegratedFactory.this.flushOutputBuffers();
+        }
+
+        @Override
+        public boolean shouldDebugExportInternalBuffer() {
+            return MTESuperIntegratedFactory.this.shouldDebugExportInternalBuffer();
+        }
+
+        @Override
+        public void moveAllInternalToOutput() {
+            MTESuperIntegratedFactory.this.moveAllInternalToOutput();
+        }
+
+        @Override
+        public void clearInternalRuntimeBuffersForUnload() {
+            MTESuperIntegratedFactory.this.clearInternalRuntimeBuffersForUnload();
+        }
+
+        @Override
+        public void clearStartupMaterialsForUnload() {
+            MTESuperIntegratedFactory.this.clearStartupMaterialsForUnload();
+        }
+
+        @Override
+        public ProcessRequirements processRequirements() {
+            return MTESuperIntegratedFactory.this.processRequirements;
+        }
+
+        @Override
+        public boolean addOutput(ItemStack stack) {
+            return MTESuperIntegratedFactory.this.addOutput(stack);
+        }
+
+        @Override
+        public void decrementStoredMachineDemandFor(ItemStack machine) {
+            MTESuperIntegratedFactory.this.decrementStoredMachineDemandFor(machine);
+        }
+
+        @Override
+        public boolean hasStoredProcessRequirements() {
+            return MTESuperIntegratedFactory.this.hasStoredProcessRequirements();
+        }
+
+        @Override
+        public void unloadCurrentProcessState() {
+            MTESuperIntegratedFactory.this.unloadCurrentProcessState();
+        }
+
+        @Override
+        public boolean hasDeferredRuntimeGraph() {
+            return MTESuperIntegratedFactory.this.hasDeferredRuntimeGraph;
+        }
+
+        @Override
+        public void installDeferredProcessSubmission() {
+            MTESuperIntegratedFactory.this.installDeferredProcessSubmission();
+        }
+
+        @Override
+        public ProcessRequirements pendingProcessRequirements() {
+            return MTESuperIntegratedFactory.this.pendingProcessRequirements;
+        }
+
+        @Override
+        public void installPendingProcessRequirements() {
+            MTESuperIntegratedFactory.this.installPendingProcessRequirements();
+        }
+
+        @Override
+        public void enterStandby() {
+            MTESuperIntegratedFactory.this.factoryMode = MODE_STANDBY;
+            MTESuperIntegratedFactory.this.ioCycleTicks = 0;
+        }
+
+        @Override
+        public void markDirty() {
+            getBaseMetaTileEntity().markDirty();
         }
     };
     private int factoryMode = MODE_STANDBY;
@@ -2829,50 +2918,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
      * jobs with their already-consumed inputs, and only promotes a pending graph after every local buffer is empty.
      */
     private void processOutputMode() {
-        discardRunningJobsWithLoss();
-        flushOutputBuffers();
-        if (shouldDebugExportInternalBuffer()) {
-            moveAllInternalToOutput();
-            flushOutputBuffers();
-        } else {
-            clearInternalRuntimeBuffersForUnload();
-        }
-        clearStartupMaterialsForUnload();
-        for (ProcessRequirements.ItemDemand demand : processRequirements.nonConsumables) {
-            while (demand.stored > 0 && demand.stack != null) {
-                ItemStack output = demand.stack.copy();
-                output.stackSize = 1;
-                if (!addOutput(output)) {
-                    break;
-                }
-                demand.stored--;
-            }
-        }
-        Iterator<ItemStack> machineIterator = processRequirements.storedMachines.iterator();
-        while (machineIterator.hasNext()) {
-            ItemStack machine = machineIterator.next();
-            ItemStack output = machine.copy();
-            output.stackSize = 1;
-            if (!addOutput(output)) {
-                break;
-            }
-            machineIterator.remove();
-            decrementStoredMachineDemandFor(machine);
-        }
-        if (hasStoredProcessRequirements()) {
-            getBaseMetaTileEntity().markDirty();
-            return;
-        }
-        unloadCurrentProcessState();
-        if (hasDeferredRuntimeGraph) {
-            installDeferredProcessSubmission();
-        } else if (pendingProcessRequirements.hasSubmittedDemands()) {
-            installPendingProcessRequirements();
-        } else {
-            factoryMode = MODE_STANDBY;
-            ioCycleTicks = 0;
-        }
-        getBaseMetaTileEntity().markDirty();
+        IntegratedFactoryUnloadHandler.processOutputMode(unloadContext);
     }
 
     private void cancelCurrentProcessForOutput() {

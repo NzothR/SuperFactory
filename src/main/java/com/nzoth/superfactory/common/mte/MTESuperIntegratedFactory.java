@@ -15,9 +15,7 @@ import static gregtech.api.util.GTStructureUtility.buildHatchAdder;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.math.BigInteger;
-import java.text.Collator;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -27,7 +25,6 @@ import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -71,7 +68,9 @@ import com.nzoth.superfactory.common.process.analysis.CycleInfo;
 import com.nzoth.superfactory.common.process.analysis.GraphAnalysisResult;
 import com.nzoth.superfactory.common.process.analysis.GraphValidationError;
 import com.nzoth.superfactory.common.process.analysis.ProcessGraphAnalyzer;
+import com.nzoth.superfactory.common.process.export.RawMaterialExporter;
 import com.nzoth.superfactory.common.process.key.MaterialKey;
+import com.nzoth.superfactory.common.process.recipe.ProcessNodeRecipeApplier;
 import com.nzoth.superfactory.common.process.runtime.BufferedFluidStack;
 import com.nzoth.superfactory.common.process.runtime.BufferedItemStack;
 import com.nzoth.superfactory.common.process.runtime.CycleRuntimeManager;
@@ -80,6 +79,8 @@ import com.nzoth.superfactory.common.process.runtime.OutputRouteType;
 import com.nzoth.superfactory.common.process.runtime.ProcessBufferUtil;
 import com.nzoth.superfactory.common.process.runtime.ProcessRuntimeMath;
 import com.nzoth.superfactory.common.process.runtime.RunningJob;
+import com.nzoth.superfactory.common.process.runtime.RuntimeOutputFormatter;
+import com.nzoth.superfactory.common.process.runtime.RuntimeResourceSnapshot;
 import com.nzoth.superfactory.common.process.runtime.RuntimeRouteResolver;
 import com.nzoth.superfactory.common.process.schedule.IntegratedFactoryScheduler;
 import com.nzoth.superfactory.common.process.schedule.NodeCandidate;
@@ -1087,82 +1088,58 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     public void exportProcessRawMaterials(EntityPlayer player) {
-        RawMaterialExportPlan plan = buildRawMaterialExportPlan();
-        for (String nodeName : plan.oreDictionaryNodes) {
-            GTUtility.sendChatToPlayer(
-                player,
-                EnumChatFormatting.YELLOW + nodeName
-                    + ":"
-                    + tr("superfactory.machine.super_integrated_factory.chat.raw_material_ore_manual"));
-        }
-        if (plan.items.isEmpty() && plan.fluids.isEmpty()) {
-            if (!plan.oreDictionaryNodes.isEmpty()) {
-                sendProcessCanvasStatus(
-                    player,
-                    tr("superfactory.machine.super_integrated_factory.chat.raw_material_ore_notice"),
-                    0xFFFFFF77);
-                return;
+        new RawMaterialExporter(new RawMaterialExporter.Context() {
+
+            @Override
+            public ProcessGraph processGraph() {
+                return processGraph;
             }
-            sendProcessCanvasStatus(
-                player,
-                tr("superfactory.machine.super_integrated_factory.chat.raw_material_none"),
-                0xFFFF7777);
-            return;
-        }
-        List<RawMaterialMarkerTarget> targets = collectRawMaterialMarkerTargets();
-        if (targets.isEmpty()) {
-            sendProcessCanvasStatus(
-                player,
-                tr("superfactory.machine.super_integrated_factory.chat.raw_material_no_me_hatch"),
-                0xFFFF7777);
-            return;
-        }
-        int itemCapacity = 0;
-        int fluidCapacity = 0;
-        for (RawMaterialMarkerTarget target : targets) {
-            itemCapacity += target.itemCapacity();
-            fluidCapacity += target.fluidCapacity();
-        }
-        if (itemCapacity < plan.items.size() || fluidCapacity < plan.fluids.size()) {
-            sendProcessCanvasStatus(
-                player,
-                tr("superfactory.machine.super_integrated_factory.chat.raw_material_capacity_insufficient") + " "
-                    + plan.items.size()
-                    + "/"
-                    + itemCapacity
-                    + " "
-                    + plan.fluids.size()
-                    + "/"
-                    + fluidCapacity,
-                0xFFFF7777);
-            return;
-        }
-        for (RawMaterialMarkerTarget target : targets) {
-            target.clear();
-        }
-        int itemIndex = 0;
-        int fluidIndex = 0;
-        for (RawMaterialMarkerTarget target : targets) {
-            while (itemIndex < plan.items.size() && target.addItem(plan.items.get(itemIndex))) {
-                itemIndex++;
+
+            @Override
+            public Iterable<IDualInputHatch> dualInputHatches() {
+                return mDualInputHatches;
             }
-            while (fluidIndex < plan.fluids.size() && target.addFluid(plan.fluids.get(fluidIndex))) {
-                fluidIndex++;
+
+            @Override
+            public Iterable<MTEHatchInputBus> inputBusses() {
+                return mInputBusses;
             }
-        }
-        String successMessage = tr("superfactory.machine.super_integrated_factory.chat.raw_material_exported") + ": "
-            + plan.items.size()
-            + " "
-            + tr("superfactory.machine.super_integrated_factory.chat.raw_material_items")
-            + ", "
-            + plan.fluids.size()
-            + " "
-            + tr("superfactory.machine.super_integrated_factory.chat.raw_material_fluids");
-        if (!plan.oreDictionaryNodes.isEmpty()) {
-            successMessage += ", " + tr("superfactory.machine.super_integrated_factory.chat.raw_material_ore_notice");
-        }
-        sendProcessCanvasStatus(player, successMessage, 0xFF75D17C);
-        getBaseMetaTileEntity().markDirty();
+
+            @Override
+            public Iterable<MTEHatchInput> inputHatches() {
+                return mInputHatches;
+            }
+
+            @Override
+            public boolean isFluidDisplay(ItemStack stack) {
+                return MTESuperIntegratedFactory.this.isFluidDisplay(stack);
+            }
+
+            @Override
+            public boolean itemMatches(ItemStack input, ItemStack output) {
+                return MTESuperIntegratedFactory.this.itemMatches(input, output);
+            }
+
+            @Override
+            public String safeNodeName(ProcessNode node) {
+                return MTESuperIntegratedFactory.this.safeNodeName(node);
+            }
+
+            @Override
+            public String translate(String key) {
+                return tr(key);
+            }
+
+            @Override
+            public void sendStatus(EntityPlayer player, String message, int color) {
+                sendProcessCanvasStatus(player, message, color);
+            }
+
+            @Override
+            public void markDirty() {
+                getBaseMetaTileEntity().markDirty();
+            }
+        }).export(player);
     }
 
     private void sendProcessCanvasStatus(EntityPlayer player, String message, int color) {
@@ -1171,166 +1148,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         } else if (player != null) {
             GTUtility.sendChatToPlayer(player, message);
         }
-    }
-
-    private RawMaterialExportPlan buildRawMaterialExportPlan() {
-        RawMaterialExportPlan plan = new RawMaterialExportPlan();
-        List<ProcessNode> relevantNodes = findRawMaterialRelevantNodes();
-        Set<Integer> relevantIds = new HashSet<>();
-        for (ProcessNode node : relevantNodes) {
-            relevantIds.add(node.id);
-        }
-        for (ProcessNode node : relevantNodes) {
-            for (int slot = 0; slot < node.inputHandler.getSlots(); slot++) {
-                ItemStack input = node.inputHandler.getStackInSlot(slot);
-                if (input == null) {
-                    continue;
-                }
-                FluidStack fluid = GTUtility.getFluidFromDisplayStack(input);
-                boolean suppliedInternally = fluid == null ? hasDirectItemProducer(node.id, input, relevantIds)
-                    : hasDirectFluidProducer(node.id, fluid, relevantIds);
-                if (suppliedInternally) {
-                    continue;
-                }
-                if (fluid != null && fluid.getFluid() != null) {
-                    addRawMaterialFluid(plan, fluid);
-                } else if (node.hasInputVariants(slot)) {
-                    addRawMaterialOreWarning(plan, safeNodeName(node));
-                } else {
-                    addRawMaterialItem(plan, input);
-                }
-            }
-        }
-        return plan;
-    }
-
-    private List<ProcessNode> findRawMaterialRelevantNodes() {
-        List<ProcessNode> relevant = new ArrayList<>();
-        for (ProcessNode node : processGraph.nodes) {
-            if (node.endNode) {
-                collectRawMaterialConnectedNodes(node.id, relevant);
-            }
-        }
-        if (!relevant.isEmpty()) {
-            return relevant;
-        }
-        for (ProcessNode node : processGraph.nodes) {
-            if (node.locked && node.lastRecipeCheckPassed) {
-                relevant.add(node);
-            }
-        }
-        return relevant;
-    }
-
-    private void collectRawMaterialConnectedNodes(int nodeId, List<ProcessNode> relevant) {
-        ProcessNode node = processGraph.findNode(nodeId);
-        if (node == null || relevant.contains(node)) {
-            return;
-        }
-        relevant.add(node);
-        for (ProcessEdge edge : processGraph.edges) {
-            if (edge.fromNodeId == nodeId) {
-                collectRawMaterialConnectedNodes(edge.toNodeId, relevant);
-            }
-            if (edge.toNodeId == nodeId) {
-                collectRawMaterialConnectedNodes(edge.fromNodeId, relevant);
-            }
-        }
-    }
-
-    private boolean hasDirectItemProducer(int consumerNodeId, ItemStack input, Set<Integer> relevantIds) {
-        for (ProcessEdge edge : processGraph.edges) {
-            if (edge.toNodeId != consumerNodeId || !relevantIds.contains(edge.fromNodeId)) {
-                continue;
-            }
-            ProcessNode producer = processGraph.findNode(edge.fromNodeId);
-            if (producer == null) {
-                continue;
-            }
-            for (int outputSlot = 0; outputSlot < producer.outputHandler.getSlots(); outputSlot++) {
-                ItemStack output = producer.outputHandler.getStackInSlot(outputSlot);
-                if (output != null && !isFluidDisplay(output) && itemMatches(input, output)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean hasDirectFluidProducer(int consumerNodeId, FluidStack input, Set<Integer> relevantIds) {
-        for (ProcessEdge edge : processGraph.edges) {
-            if (edge.toNodeId != consumerNodeId || !relevantIds.contains(edge.fromNodeId)) {
-                continue;
-            }
-            ProcessNode producer = processGraph.findNode(edge.fromNodeId);
-            if (producer == null) {
-                continue;
-            }
-            for (int outputSlot = 0; outputSlot < producer.outputHandler.getSlots(); outputSlot++) {
-                FluidStack output = GTUtility
-                    .getFluidFromDisplayStack(producer.outputHandler.getStackInSlot(outputSlot));
-                if (output != null && output.isFluidEqual(input)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private void addRawMaterialItem(RawMaterialExportPlan plan, ItemStack stack) {
-        for (ItemStack existing : plan.items) {
-            if (GTUtility.areStacksEqual(existing, stack, true)) {
-                return;
-            }
-        }
-        plan.items.add(copyItemAmount(stack, 1));
-    }
-
-    private void addRawMaterialFluid(RawMaterialExportPlan plan, FluidStack stack) {
-        for (FluidStack existing : plan.fluids) {
-            if (existing != null && existing.isFluidEqual(stack)) {
-                return;
-            }
-        }
-        plan.fluids.add(copyFluidAmount(stack, 1));
-    }
-
-    private void addRawMaterialOreWarning(RawMaterialExportPlan plan, String nodeName) {
-        if (!plan.oreDictionaryNodes.contains(nodeName)) {
-            plan.oreDictionaryNodes.add(nodeName);
-        }
-    }
-
-    private List<RawMaterialMarkerTarget> collectRawMaterialMarkerTargets() {
-        List<RawMaterialMarkerTarget> combinedTargets = new ArrayList<>();
-        List<RawMaterialMarkerTarget> separateTargets = new ArrayList<>();
-        Set<Object> seen = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
-        for (IDualInputHatch hatch : mDualInputHatches) {
-            if (hatch != null && seen.add(hatch)) {
-                RawMaterialMarkerTarget target = RawMaterialMarkerTarget.tryCreate(hatch);
-                if (target != null) {
-                    (target.isCombined() ? combinedTargets : separateTargets).add(target);
-                }
-            }
-        }
-        for (MTEHatchInputBus bus : mInputBusses) {
-            if (bus != null && seen.add(bus)) {
-                RawMaterialMarkerTarget target = RawMaterialMarkerTarget.tryCreate(bus);
-                if (target != null) {
-                    (target.isCombined() ? combinedTargets : separateTargets).add(target);
-                }
-            }
-        }
-        for (MTEHatchInput hatch : mInputHatches) {
-            if (hatch != null && seen.add(hatch)) {
-                RawMaterialMarkerTarget target = RawMaterialMarkerTarget.tryCreate(hatch);
-                if (target != null) {
-                    (target.isCombined() ? combinedTargets : separateTargets).add(target);
-                }
-            }
-        }
-        combinedTargets.addAll(separateTargets);
-        return combinedTargets;
     }
 
     public static MTESuperIntegratedFactory getClientEditingFactory() {
@@ -1350,276 +1167,34 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     public void applyRecipeToNode(int nodeId, NBTTagCompound recipeTag) {
-        ProcessNode node = processGraph.findNode(nodeId);
-        if (node == null || node.locked) {
-            return;
-        }
-        loadHandlerItems(node.inputHandler, recipeTag.getCompoundTag("Inputs"));
-        loadInputVariants(node, recipeTag);
-        loadHandlerItems(node.outputHandler, recipeTag.getCompoundTag("Outputs"));
-        loadOutputChances(node, recipeTag);
-        if (recipeTag.hasKey("NonConsumables")) {
-            loadHandlerItems(node.nonConsumableHandler, recipeTag.getCompoundTag("NonConsumables"));
-        }
-        if (recipeTag.hasKey("Machine")) {
-            node.machineHandler.setStackInSlot(0, ItemStack.loadItemStackFromNBT(recipeTag.getCompoundTag("Machine")));
-        } else {
-            node.machineHandler.setStackInSlot(0, null);
-        }
-        node.durationTicks = Math.max(0, recipeTag.getInteger("DurationTicks"));
-        node.euPerTick = Math.max(0L, recipeTag.getLong("EUt"));
-        node.baseDurationTicks = Math.max(
-            0,
-            recipeTag.hasKey("BaseDurationTicks") ? recipeTag.getInteger("BaseDurationTicks") : node.durationTicks);
-        node.baseEuPerTick = Math.max(0L, recipeTag.hasKey("BaseEUt") ? recipeTag.getLong("BaseEUt") : node.euPerTick);
-        node.recipeHandlerName = recipeTag.getString("RecipeHandlerName");
-        node.recipeMapName = recipeTag.getString("RecipeMapName");
-        node.fakeRecipeSnapshot = recipeTag.getBoolean("FakeRecipeSnapshot");
-        node.virtualRecipeSnapshot = node.fakeRecipeSnapshot
-            ? recipeTag.hasKey("VirtualRecipeSnapshot", Constants.NBT.TAG_COMPOUND)
-                ? recipeTag.getCompoundTag("VirtualRecipeSnapshot")
-                : (NBTTagCompound) recipeTag.copy()
-            : null;
-        node.recipeFingerprint = recipeTag.getString("RecipeFingerprint");
-        node.lastRecipeCheckPassed = node.recipeFingerprint != null
-            && node.recipeFingerprint.equals(buildNodeFingerprint(node));
-        node.locked = false;
-    }
-
-    private void loadOutputChances(ProcessNode node, NBTTagCompound recipeTag) {
-        node.resetOutputChances();
-        if (!recipeTag.hasKey("OutputChances", Constants.NBT.TAG_INT_ARRAY)) {
-            return;
-        }
-        int[] chances = recipeTag.getIntArray("OutputChances");
-        for (int slot = 0; slot < chances.length && slot < ProcessNode.OUTPUT_SLOTS; slot++) {
-            node.setOutputChance(slot, chances[slot]);
-        }
-    }
-
-    private void loadHandlerItems(com.gtnewhorizons.modularui.api.forge.ItemStackHandler handler,
-        NBTTagCompound handlerTag) {
-        for (int i = 0; i < handler.getSlots(); i++) {
-            handler.setStackInSlot(i, null);
-        }
-        handler.deserializeNBT(handlerTag);
-    }
-
-    private void loadInputVariants(ProcessNode node, NBTTagCompound recipeTag) {
-        for (int i = 0; i < ProcessNode.INPUT_SLOTS; i++) {
-            node.clearInputVariants(i);
-        }
-        if (!recipeTag.hasKey("InputVariants", Constants.NBT.TAG_LIST)) {
-            return;
-        }
-        NBTTagList inputVariantList = recipeTag.getTagList("InputVariants", Constants.NBT.TAG_COMPOUND);
-        for (int i = 0; i < inputVariantList.tagCount(); i++) {
-            NBTTagCompound variantTag = inputVariantList.getCompoundTagAt(i);
-            int slot = Math.max(0, Math.min(ProcessNode.INPUT_SLOTS - 1, variantTag.getInteger("Slot")));
-            node.inputVariants[slot].readFromNBT(variantTag);
-        }
+        ProcessNodeRecipeApplier.apply(processGraph, nodeId, recipeTag);
     }
 
     public static String buildRecipeFingerprint(GTRecipe recipe) {
-        if (recipe == null) {
-            return "";
-        }
-        com.gtnewhorizons.modularui.api.forge.ItemStackHandler inputs = new com.gtnewhorizons.modularui.api.forge.ItemStackHandler(
-            ProcessNode.INPUT_SLOTS);
-        com.gtnewhorizons.modularui.api.forge.ItemStackHandler outputs = new com.gtnewhorizons.modularui.api.forge.ItemStackHandler(
-            ProcessNode.OUTPUT_SLOTS);
-        com.gtnewhorizons.modularui.api.forge.ItemStackHandler nonConsumables = new com.gtnewhorizons.modularui.api.forge.ItemStackHandler(
-            ProcessNode.NON_CONSUMABLE_SLOTS);
-        fillHandler(inputs, recipe.mInputs);
-        fillHandlerWithFluids(inputs, recipe.mFluidInputs);
-        fillHandler(outputs, recipe.mOutputs);
-        fillHandlerWithFluids(outputs, recipe.mFluidOutputs);
-        applyRecipeOutputChances(outputs, recipe, null);
-        if (recipe.mSpecialItems instanceof ItemStack stack) {
-            nonConsumables.setStackInSlot(0, stack.copy());
-        } else if (recipe.mSpecialItems instanceof ItemStack[]stacks) {
-            fillHandler(nonConsumables, stacks);
-        }
-        return buildRecipeFingerprint(
-            inputs,
-            outputs,
-            nonConsumables,
-            buildOutputChanceArray(outputs, recipe),
-            recipe.mDuration,
-            recipe.mEUt);
+        return ProcessNodeRecipeApplier.buildRecipeFingerprint(recipe);
     }
 
     public static String buildRecipeFingerprint(com.gtnewhorizons.modularui.api.forge.ItemStackHandler inputs,
         com.gtnewhorizons.modularui.api.forge.ItemStackHandler outputs,
         com.gtnewhorizons.modularui.api.forge.ItemStackHandler nonConsumables, int[] outputChances, int duration,
         long euPerTick) {
-        return "t=" + duration
-            + ";e="
-            + euPerTick
-            + ";i="
-            + handlerFingerprint(inputs)
-            + ";o="
-            + handlerFingerprint(outputs)
-            + ";oc="
-            + outputChanceFingerprint(outputs, outputChances == null ? defaultOutputChances() : outputChances)
-            + ";nc="
-            + handlerFingerprint(nonConsumables);
-    }
-
-    private static String outputChanceFingerprint(com.gtnewhorizons.modularui.api.forge.ItemStackHandler outputs,
-        int[] outputChances) {
-        List<String> parts = new ArrayList<>();
-        if (outputs == null || outputChances == null) {
-            return parts.toString();
-        }
-        for (int i = 0; i < outputs.getSlots() && i < outputChances.length; i++) {
-            if (outputs.getStackInSlot(i) != null && outputChances[i] != 10000) {
-                parts.add(i + ":" + outputChances[i]);
-            }
-        }
-        return parts.toString();
+        return ProcessNodeRecipeApplier
+            .buildRecipeFingerprint(inputs, outputs, nonConsumables, outputChances, duration, euPerTick);
     }
 
     public static String buildRecipeFingerprint(com.gtnewhorizons.modularui.api.forge.ItemStackHandler inputs,
         com.gtnewhorizons.modularui.api.forge.ItemStackHandler outputs,
         com.gtnewhorizons.modularui.api.forge.ItemStackHandler nonConsumables, int duration, long euPerTick) {
-        return buildRecipeFingerprint(inputs, outputs, nonConsumables, defaultOutputChances(), duration, euPerTick);
+        return ProcessNodeRecipeApplier.buildRecipeFingerprint(inputs, outputs, nonConsumables, duration, euPerTick);
     }
 
     private String buildNodeFingerprint(ProcessNode node) {
         return node.buildRecipeFingerprint();
     }
 
-    private static void fillHandler(com.gtnewhorizons.modularui.api.forge.ItemStackHandler handler,
-        ItemStack[] stacks) {
-        if (stacks == null) {
-            return;
-        }
-        int slot = firstEmptySlot(handler);
-        for (ItemStack stack : stacks) {
-            if (stack != null && stack.stackSize > 0 && slot < handler.getSlots()) {
-                handler.setStackInSlot(slot++, stack.copy());
-            }
-        }
-    }
-
-    private static void fillHandlerWithFluids(com.gtnewhorizons.modularui.api.forge.ItemStackHandler handler,
-        FluidStack[] stacks) {
-        if (stacks == null) {
-            return;
-        }
-        int slot = firstEmptySlot(handler);
-        for (FluidStack stack : stacks) {
-            if (stack != null && stack.amount > 0 && slot < handler.getSlots()) {
-                ItemStack display = GTUtility.getFluidDisplayStack(stack, true);
-                if (display != null) {
-                    handler.setStackInSlot(slot++, display);
-                }
-            }
-        }
-    }
-
     public static void applyRecipeOutputChances(com.gtnewhorizons.modularui.api.forge.ItemStackHandler outputs,
         GTRecipe recipe, ProcessNode node) {
-        if (node != null) {
-            node.resetOutputChances();
-        }
-        if (outputs == null || recipe == null) {
-            return;
-        }
-        boolean[] usedSlots = new boolean[outputs.getSlots()];
-        for (int recipeOutput = 0; recipeOutput < recipe.mOutputs.length; recipeOutput++) {
-            ItemStack stack = recipe.mOutputs[recipeOutput];
-            if (stack == null) {
-                continue;
-            }
-            int slot = findMatchingOutputSlot(outputs, stack, usedSlots);
-            if (slot >= 0 && node != null) {
-                node.setOutputChance(slot, normalizeRecipeChance(recipe.getOutputChance(recipeOutput)));
-                usedSlots[slot] = true;
-            }
-        }
-    }
-
-    private static int[] buildOutputChanceArray(com.gtnewhorizons.modularui.api.forge.ItemStackHandler outputs,
-        GTRecipe recipe) {
-        int[] chances = defaultOutputChances();
-        if (outputs == null || recipe == null) {
-            return chances;
-        }
-        boolean[] usedSlots = new boolean[outputs.getSlots()];
-        for (int recipeOutput = 0; recipeOutput < recipe.mOutputs.length; recipeOutput++) {
-            ItemStack stack = recipe.mOutputs[recipeOutput];
-            if (stack == null) {
-                continue;
-            }
-            int slot = findMatchingOutputSlot(outputs, stack, usedSlots);
-            if (slot >= 0) {
-                chances[slot] = normalizeRecipeChance(recipe.getOutputChance(recipeOutput));
-                usedSlots[slot] = true;
-            }
-        }
-        return chances;
-    }
-
-    private static int normalizeRecipeChance(int chance) {
-        return chance <= 0 ? 10000 : Math.max(0, Math.min(10000, chance));
-    }
-
-    private static int[] defaultOutputChances() {
-        int[] chances = new int[ProcessNode.OUTPUT_SLOTS];
-        java.util.Arrays.fill(chances, 10000);
-        return chances;
-    }
-
-    private static int findMatchingOutputSlot(com.gtnewhorizons.modularui.api.forge.ItemStackHandler outputs,
-        ItemStack stack) {
-        return findMatchingOutputSlot(outputs, stack, null);
-    }
-
-    private static int findMatchingOutputSlot(com.gtnewhorizons.modularui.api.forge.ItemStackHandler outputs,
-        ItemStack stack, boolean[] usedSlots) {
-        for (int slot = 0; slot < outputs.getSlots(); slot++) {
-            if (usedSlots != null && slot < usedSlots.length && usedSlots[slot]) {
-                continue;
-            }
-            ItemStack existing = outputs.getStackInSlot(slot);
-            if (existing != null && GTUtility.areStacksEqual(existing, stack, true)) {
-                return slot;
-            }
-        }
-        return -1;
-    }
-
-    private static int firstEmptySlot(com.gtnewhorizons.modularui.api.forge.ItemStackHandler handler) {
-        for (int i = 0; i < handler.getSlots(); i++) {
-            if (handler.getStackInSlot(i) == null) {
-                return i;
-            }
-        }
-        return handler.getSlots();
-    }
-
-    private static String handlerFingerprint(com.gtnewhorizons.modularui.api.forge.ItemStackHandler handler) {
-        List<String> parts = new ArrayList<>();
-        for (int i = 0; i < handler.getSlots(); i++) {
-            ItemStack stack = handler.getStackInSlot(i);
-            if (stack != null) {
-                parts.add(stackFingerprint(stack));
-            }
-        }
-        parts.sort(Comparator.naturalOrder());
-        return parts.toString();
-    }
-
-    private static String stackFingerprint(ItemStack stack) {
-        FluidStack fluid = GTUtility.getFluidFromDisplayStack(stack);
-        if (fluid != null && fluid.getFluid() != null) {
-            return "fluid:" + fluid.getFluid()
-                .getName() + "@" + Math.max(1, fluid.amount);
-        }
-        String itemName = net.minecraft.item.Item.itemRegistry.getNameForObject(stack.getItem());
-        return "item:" + itemName + ":" + stack.getItemDamage() + "@" + Math.max(1, stack.stackSize);
+        ProcessNodeRecipeApplier.applyRecipeOutputChances(outputs, recipe, node);
     }
 
     private ProcessNode getSelectedNode() {
@@ -2652,7 +2227,43 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     private RuntimeResourceSnapshot buildRuntimeResourceSnapshot() {
         startRecipeProcessing();
         try {
-            RuntimeResourceSnapshot snapshot = new RuntimeResourceSnapshot();
+            RuntimeResourceSnapshot snapshot = new RuntimeResourceSnapshot(new RuntimeResourceSnapshot.Context() {
+
+                @Override
+                public Iterable<IDualInputHatch> dualInputHatches() {
+                    return mDualInputHatches;
+                }
+
+                @Override
+                public Iterable<RunningJob> runningJobs() {
+                    return runningJobs;
+                }
+
+                @Override
+                public ProcessNode findRuntimeNode(int nodeId) {
+                    return MTESuperIntegratedFactory.this.findRuntimeNode(nodeId);
+                }
+
+                @Override
+                public long getStackAmount(ItemStack stack) {
+                    return MTESuperIntegratedFactory.this.getStackAmount(stack);
+                }
+
+                @Override
+                public MaterialKey materialKeyOf(ItemStack stack) {
+                    return MTESuperIntegratedFactory.this.materialKeyOf(stack);
+                }
+
+                @Override
+                public CycleRuntimeState cycleRuntimeState(MaterialKey key) {
+                    return cycleRuntimeManager.get(key);
+                }
+
+                @Override
+                public boolean itemMatchesUncached(ItemStack recipeInput, ItemStack provided) {
+                    return MTESuperIntegratedFactory.this.itemMatchesUncached(recipeInput, provided);
+                }
+            });
             snapshot.captureInternalItems(internalItems);
             snapshot.captureInternalFluids(internalFluids);
             snapshot.captureLiveItems(normalizeLiveItemRefs(getStoredInputs()));
@@ -2691,202 +2302,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             }
         }
         return normalized.toArray(new FluidStack[0]);
-    }
-
-    private final class RuntimeResourceSnapshot {
-
-        private final List<BufferedItemStack> internalItemView = new ArrayList<>();
-        private final List<BufferedFluidStack> internalFluidView = new ArrayList<>();
-        private final List<BufferedItemStack> liveItemView = new ArrayList<>();
-        private final List<BufferedFluidStack> liveFluidView = new ArrayList<>();
-        private final List<BufferedItemStack> dualItemView = new ArrayList<>();
-        private final List<BufferedFluidStack> dualFluidView = new ArrayList<>();
-        private final List<BufferedItemStack> incomingItemWithinLookahead = new ArrayList<>();
-        private final List<BufferedFluidStack> incomingFluidWithinLookahead = new ArrayList<>();
-        private final Map<String, int[]> oreIdCache = new LinkedHashMap<>();
-        private final Map<String, Boolean> itemMatchCache = new LinkedHashMap<>();
-
-        private void captureInternalItems(List<BufferedItemStack> source) {
-            for (BufferedItemStack entry : source) {
-                if (entry != null && entry.stack != null && entry.amount > 0L) {
-                    addItemToBuffer(internalItemView, entry.stack, entry.amount);
-                }
-            }
-        }
-
-        private void captureInternalFluids(List<BufferedFluidStack> source) {
-            for (BufferedFluidStack entry : source) {
-                if (entry != null && entry.fluidStack != null && entry.amount > 0L) {
-                    addFluidToBuffer(internalFluidView, entry.fluidStack, entry.amount);
-                }
-            }
-        }
-
-        private void captureLiveItems(ItemStack[] stacks) {
-            for (ItemStack stack : stacks) {
-                if (stack != null && stack.stackSize > 0) {
-                    addItemToBuffer(liveItemView, stack, stack.stackSize);
-                }
-            }
-        }
-
-        private void captureLiveFluids(FluidStack[] fluids) {
-            for (FluidStack stack : fluids) {
-                if (stack != null && stack.amount > 0) {
-                    addFluidToBuffer(liveFluidView, stack, stack.amount);
-                }
-            }
-        }
-
-        private void captureDualInputs() {
-            for (IDualInputHatch hatch : mDualInputHatches) {
-                if (hatch == null) {
-                    continue;
-                }
-                for (Iterator<? extends IDualInputInventory> iterator = hatch.inventories(); iterator.hasNext();) {
-                    IDualInputInventory inventory = iterator.next();
-                    if (inventory == null || inventory.isEmpty()) {
-                        continue;
-                    }
-                    ItemStack[] items = inventory.getItemInputs();
-                    if (items != null) {
-                        for (ItemStack stack : items) {
-                            if (stack != null && stack.stackSize > 0) {
-                                addItemToBuffer(dualItemView, stack, stack.stackSize);
-                            }
-                        }
-                    }
-                    if (!hatch.supportsFluids()) {
-                        continue;
-                    }
-                    FluidStack[] fluids = inventory.getFluidInputs();
-                    if (fluids != null) {
-                        for (FluidStack stack : fluids) {
-                            if (stack != null && stack.amount > 0) {
-                                addFluidToBuffer(dualFluidView, stack, stack.amount);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        private long internalItemAmount(ItemStack template) {
-            return countItemInBuffer(internalItemView, template);
-        }
-
-        private long internalFluidAmount(FluidStack template) {
-            return countFluidInBuffer(internalFluidView, template);
-        }
-
-        private void captureIncomingWithinLookahead() {
-            int lookahead = Math.max(0, Config.superIntegratedFactoryLookaheadTicks);
-            if (lookahead <= 0) {
-                return;
-            }
-            for (RunningJob job : runningJobs) {
-                if (job.remainingTicks > lookahead) {
-                    continue;
-                }
-                ProcessNode node = findRuntimeNode(job.nodeId);
-                if (node == null) {
-                    continue;
-                }
-                captureProjectedOutputs(node, job.parallel);
-            }
-        }
-
-        private void captureProjectedOutputs(ProcessNode node, int parallel) {
-            for (int slot = 0; slot < node.outputHandler.getSlots(); slot++) {
-                ItemStack output = node.outputHandler.getStackInSlot(slot);
-                if (output == null) {
-                    continue;
-                }
-                FluidStack fluid = GTUtility.getFluidFromDisplayStack(output);
-                if (fluid != null) {
-                    addFluidToBuffer(
-                        incomingFluidWithinLookahead,
-                        fluid,
-                        safeMultiply(Math.max(1L, getStackAmount(output)), Math.max(1L, parallel)));
-                } else {
-                    long rolls = ParallelHelper
-                        .calculateIntegralChancedOutputMultiplier(node.getOutputChance(slot), Math.max(1, parallel));
-                    if (rolls > 0L) {
-                        addItemToBuffer(
-                            incomingItemWithinLookahead,
-                            output,
-                            safeMultiply(getStackAmount(output), rolls));
-                    }
-                }
-            }
-        }
-
-        private long projectedItemAmount(ItemStack template) {
-            return safeAddLong(internalItemAmount(template), countItemInBuffer(incomingItemWithinLookahead, template));
-        }
-
-        private long projectedFluidAmount(FluidStack template) {
-            return safeAddLong(
-                internalFluidAmount(template),
-                countFluidInBuffer(incomingFluidWithinLookahead, template));
-        }
-
-        private long consumableInternalItemAmount(ProcessNode consumer, ItemStack template) {
-            long stored = internalItemAmount(template);
-            CycleRuntimeState state = cycleRuntimeManager.get(materialKeyOf(template));
-            return state == null || consumer != null && state.containsNode(consumer.id) ? stored
-                : Math.max(0L, stored - state.reserve);
-        }
-
-        private long consumableInternalFluidAmount(ProcessNode consumer, FluidStack template) {
-            long stored = internalFluidAmount(template);
-            CycleRuntimeState state = cycleRuntimeManager.get(MaterialKey.ofFluid(template));
-            return state == null || consumer != null && state.containsNode(consumer.id) ? stored
-                : Math.max(0L, stored - state.reserve);
-        }
-
-        private long itemAmount(ProcessNode consumer, ItemStack template) {
-            return safeAddLong(
-                safeAddLong(
-                    consumableInternalItemAmount(consumer, template),
-                    countItemInBuffer(liveItemView, template)),
-                countItemInBuffer(dualItemView, template));
-        }
-
-        private long fluidAmount(ProcessNode consumer, FluidStack template) {
-            return safeAddLong(
-                safeAddLong(
-                    consumableInternalFluidAmount(consumer, template),
-                    countFluidInBuffer(liveFluidView, template)),
-                countFluidInBuffer(dualFluidView, template));
-        }
-
-        private int[] oreIds(ItemStack stack) {
-            if (stack == null) {
-                return GTValues.emptyIntArray;
-            }
-            String key = itemBufferKey(stack);
-            int[] cached = oreIdCache.get(key);
-            if (cached == null) {
-                cached = OreDictionary.getOreIDs(stack);
-                if (cached == null) {
-                    cached = GTValues.emptyIntArray;
-                }
-                oreIdCache.put(key, cached);
-            }
-            return cached;
-        }
-
-        private boolean itemMatchesCached(ItemStack recipeInput, ItemStack provided) {
-            String key = itemBufferKey(recipeInput) + "=>" + itemBufferKey(provided);
-            Boolean cached = itemMatchCache.get(key);
-            if (cached != null) {
-                return cached;
-            }
-            boolean matched = itemMatchesUncached(recipeInput, provided);
-            itemMatchCache.put(key, matched);
-            return matched;
-        }
     }
 
     private int distanceToTerminal(ProcessNode node, Map<Integer, Integer> cache) {
@@ -3813,121 +3228,53 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private List<String> buildActiveRuntimeOutputLines() {
-        ArrayList<RunningJobLine> entries = new ArrayList<>();
-        Map<Integer, RunningJob> jobsByNode = new LinkedHashMap<>();
-        for (RunningJob job : runningJobs) {
-            ProcessNode node = findRuntimeNode(job.nodeId);
-            if (node == null || !node.locked || job.durationTicks <= 0) {
-                continue;
-            }
-            RunningJob current = jobsByNode.get(node.id);
-            if (current == null || job.remainingTicks < current.remainingTicks) {
-                jobsByNode.put(node.id, job);
-            }
-        }
-        boolean staticNodeDisplay = runtimeGraph.nodes.size() <= STATIC_RUNTIME_NODE_LINE_THRESHOLD;
-        if (staticNodeDisplay) {
-            for (ProcessNode node : runtimeGraph.nodes) {
-                if (node == null || !node.locked) {
-                    continue;
-                }
-                RunningJob job = jobsByNode.get(node.id);
-                String nodeName = safeNodeName(node);
-                entries.add(new RunningJobLine(nodeName, node.endNode, buildRuntimeNodeLine(node, job)));
-            }
-        } else {
-            for (RunningJob job : runningJobs) {
-                ProcessNode node = findRuntimeNode(job.nodeId);
-                if (node == null || !node.locked || job.durationTicks <= 0) {
-                    continue;
-                }
-                String nodeName = safeNodeName(node);
-                entries.add(new RunningJobLine(nodeName, node.endNode, buildRuntimeNodeLine(node, job)));
-            }
-        }
-        Collator collator = Collator.getInstance(Locale.CHINA);
-        entries.sort(
-            Comparator.comparing((RunningJobLine line) -> !line.targetNode)
-                .thenComparing(line -> line.nodeName, collator)
-                .thenComparing(line -> line.text));
-        ArrayList<String> lines = new ArrayList<>();
-        int visibleLimit = Math.max(0, RUNTIME_OUTPUT_ESTIMATE_LINE_LIMIT);
-        int shownLimit = entries.size() > visibleLimit ? Math.max(0, visibleLimit - 1) : visibleLimit;
-        for (int i = 0; i < entries.size() && i < shownLimit; i++) {
-            lines.add(entries.get(i).text);
-        }
-        if (entries.size() > shownLimit && visibleLimit > 0) {
-            lines.add(
-                EnumChatFormatting.DARK_GRAY + "  "
-                    + tr("superfactory.machine.super_proxy_factory.gui.folded_prefix")
-                    + " "
-                    + (entries.size() - shownLimit)
-                    + " "
-                    + tr("superfactory.machine.super_proxy_factory.gui.folded_suffix"));
-        }
-        return lines;
-    }
+        return new RuntimeOutputFormatter(new RuntimeOutputFormatter.Context() {
 
-    private String buildRuntimeNodeLine(ProcessNode node, RunningJob job) {
-        String nodeName = safeNodeName(node);
-        if (job == null || job.durationTicks <= 0) {
-            return EnumChatFormatting.DARK_AQUA + trimToDisplayWidth(nodeName, 78)
-                + EnumChatFormatting.WHITE
-                + " "
-                + EnumChatFormatting.GREEN
-                + "0/s"
-                + " "
-                + EnumChatFormatting.GRAY
-                + "0/"
-                + Math.max(1, getEffectiveDurationTicks(node));
-        }
-        int progress = Math.max(0, job.durationTicks - job.remainingTicks);
-        return EnumChatFormatting.AQUA + trimToDisplayWidth(nodeName, 78)
-            + EnumChatFormatting.WHITE
-            + " "
-            + buildRunningJobRateSummary(node, job)
-            + " "
-            + EnumChatFormatting.GRAY
-            + progress
-            + "/"
-            + job.durationTicks;
-    }
-
-    private String buildRunningJobRateSummary(ProcessNode node, RunningJob job) {
-        double rate = 0.0D;
-        boolean fluidRate = false;
-        for (int slot = 0; slot < node.outputHandler.getSlots(); slot++) {
-            ItemStack output = node.outputHandler.getStackInSlot(slot);
-            if (output == null) {
-                continue;
+            @Override
+            public ProcessGraph runtimeGraph() {
+                return runtimeGraph;
             }
-            FluidStack fluid = GTUtility.getFluidFromDisplayStack(output);
-            double chanceMultiplier = fluid == null ? node.getOutputChance(slot) / 10000.0D : 1.0D;
-            rate = getStackAmount(output) * Math.max(1, job.parallel)
-                * chanceMultiplier
-                * 20.0D
-                / Math.max(1, job.durationTicks);
-            fluidRate = fluid != null;
-            break;
-        }
-        return EnumChatFormatting.GREEN + formatRate(rate) + (fluidRate ? "L/s" : "/s");
-    }
 
-    private RuntimeOutputKind classifyRuntimeOutputKind(ProcessNode node, ItemStack output, FluidStack fluid) {
-        boolean consumed = fluid != null ? hasDirectFluidConsumer(node, fluid) : hasDirectItemConsumer(node, output);
-        if (node.endNode && consumed) {
-            return RuntimeOutputKind.CYCLIC;
-        }
-        return consumed ? RuntimeOutputKind.INTERNAL : RuntimeOutputKind.FINAL;
-    }
+            @Override
+            public Iterable<RunningJob> runningJobs() {
+                return runningJobs;
+            }
 
-    private String runtimeOutputEstimateKey(ItemStack stack, FluidStack fluid, RuntimeOutputKind kind) {
-        if (fluid != null && fluid.getFluid() != null) {
-            return kind.name() + ":fluid:"
-                + fluid.getFluid()
-                    .getName();
-        }
-        return kind.name() + ":" + itemBufferKey(stack);
+            @Override
+            public ProcessNode findRuntimeNode(int nodeId) {
+                return MTESuperIntegratedFactory.this.findRuntimeNode(nodeId);
+            }
+
+            @Override
+            public String safeNodeName(ProcessNode node) {
+                return MTESuperIntegratedFactory.this.safeNodeName(node);
+            }
+
+            @Override
+            public int getEffectiveDurationTicks(ProcessNode node) {
+                return MTESuperIntegratedFactory.this.getEffectiveDurationTicks(node);
+            }
+
+            @Override
+            public long getStackAmount(ItemStack stack) {
+                return MTESuperIntegratedFactory.this.getStackAmount(stack);
+            }
+
+            @Override
+            public int staticNodeLineThreshold() {
+                return STATIC_RUNTIME_NODE_LINE_THRESHOLD;
+            }
+
+            @Override
+            public int visibleLineLimit() {
+                return RUNTIME_OUTPUT_ESTIMATE_LINE_LIMIT;
+            }
+
+            @Override
+            public String translate(String key) {
+                return tr(key);
+            }
+        }).buildActiveRuntimeOutputLines();
     }
 
     private String itemBufferKey(ItemStack stack) {
@@ -3947,46 +3294,11 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private String formatRate(double rate) {
-        if (rate >= 1000.0D) {
-            return formatCompactAmount(rate);
-        }
-        if (rate >= 100.0D) {
-            return String.valueOf(Math.round(rate));
-        }
-        if (rate >= 10.0D) {
-            return String.format(java.util.Locale.ROOT, "%.1f", rate);
-        }
-        return String.format(java.util.Locale.ROOT, "%.2f", rate);
+        return RuntimeOutputFormatter.formatRate(rate);
     }
 
     private String formatCompactAmount(double value) {
-        String[] suffixes = { "K", "M", "G", "T", "P", "E", "Z", "Y" };
-        int suffix = -1;
-        double scaled = value;
-        while (Math.abs(scaled) >= 1000.0D && suffix + 1 < suffixes.length) {
-            scaled /= 1000.0D;
-            suffix++;
-        }
-        if (Math.abs(scaled) >= 1000.0D) {
-            return String.format(java.util.Locale.ROOT, "%.2e", value);
-        }
-        String number;
-        double scaledAbs = Math.abs(scaled);
-        if (scaledAbs >= 100.0D) {
-            number = String.format(java.util.Locale.ROOT, "%.0f", scaled);
-        } else if (scaledAbs >= 10.0D) {
-            number = trimTrailingZero(String.format(java.util.Locale.ROOT, "%.1f", scaled));
-        } else {
-            number = trimTrailingZero(String.format(java.util.Locale.ROOT, "%.2f", scaled));
-        }
-        return number + suffixes[Math.max(0, suffix)];
-    }
-
-    private String trimTrailingZero(String value) {
-        while (value.endsWith("0") && value.contains(".")) {
-            value = value.substring(0, value.length() - 1);
-        }
-        return value.endsWith(".") ? value.substring(0, value.length() - 1) : value;
+        return RuntimeOutputFormatter.formatCompactAmount(value);
     }
 
     private String describeNode(ProcessNode node) {
@@ -4001,13 +3313,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private String trimToDisplayWidth(String text, int maxChars) {
-        if (text == null) {
-            return "";
-        }
-        if (text.length() <= maxChars) {
-            return text;
-        }
-        return text.substring(0, Math.max(0, maxChars - 3)) + "...";
+        return RuntimeOutputFormatter.trimToDisplayWidth(text, maxChars);
     }
 
     private String describeItem(ItemStack stack) {
@@ -4237,7 +3543,8 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
      */
     private long depleteItemFromLiveSnapshot(ItemStack template, long amount, List<ItemStack> consumedItems) {
         long remaining = amount;
-        Iterator<BufferedItemStack> iterator = runtimeResourceSnapshot.liveItemView.iterator();
+        Iterator<BufferedItemStack> iterator = runtimeResourceSnapshot.liveItemView()
+            .iterator();
         while (iterator.hasNext() && remaining > 0L) {
             BufferedItemStack entry = iterator.next();
             if (entry == null || entry.stack == null || entry.amount <= 0L || !itemMatches(template, entry.stack)) {
@@ -4310,7 +3617,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         }
         if (runtimeResourceSnapshot != null) {
             long remaining = amount;
-            for (BufferedFluidStack entry : runtimeResourceSnapshot.liveFluidView) {
+            for (BufferedFluidStack entry : runtimeResourceSnapshot.liveFluidView()) {
                 if (remaining <= 0L || entry == null
                     || entry.fluidStack == null
                     || entry.amount <= 0L
@@ -5152,240 +4459,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             }
         }
         return lines;
-    }
-
-    private enum RuntimeOutputKind {
-
-        INTERNAL(EnumChatFormatting.RED),
-        FINAL(EnumChatFormatting.GREEN),
-        CYCLIC(EnumChatFormatting.YELLOW);
-
-        private final EnumChatFormatting color;
-
-        RuntimeOutputKind(EnumChatFormatting color) {
-            this.color = color;
-        }
-    }
-
-    private static final class RuntimeOutputEstimateEntry {
-
-        private final ItemStack item;
-        private final FluidStack fluidStack;
-        private final boolean fluid;
-        private final RuntimeOutputKind kind;
-        private double ratePerSecond;
-
-        private RuntimeOutputEstimateEntry(ItemStack item, FluidStack fluidStack, RuntimeOutputKind kind,
-            double ratePerSecond) {
-            this.item = item == null ? null : item.copy();
-            this.fluidStack = fluidStack == null ? null : fluidStack.copy();
-            this.fluid = fluidStack != null;
-            this.kind = kind;
-            this.ratePerSecond = ratePerSecond;
-        }
-
-        private String displayName() {
-            return fluidStack != null ? fluidStack.getLocalizedName() : item == null ? "" : item.getDisplayName();
-        }
-    }
-
-    private static final class RunningJobLine {
-
-        private final String nodeName;
-        private final boolean targetNode;
-        private final String text;
-
-        private RunningJobLine(String nodeName, boolean targetNode, String text) {
-            this.nodeName = nodeName == null ? "" : nodeName;
-            this.targetNode = targetNode;
-            this.text = text == null ? "" : text;
-        }
-    }
-
-    private static final class RawMaterialExportPlan {
-
-        private final List<ItemStack> items = new ArrayList<>();
-        private final List<FluidStack> fluids = new ArrayList<>();
-        private final List<String> oreDictionaryNodes = new ArrayList<>();
-    }
-
-    private static final class RawMaterialMarkerTarget {
-
-        private final Object hatch;
-        private final ItemStack[] itemMarkers;
-        private final FluidStack[] fluidMarkers;
-        private final int itemSlotOffset;
-        private int nextItemSlot;
-        private int nextFluidSlot;
-
-        private RawMaterialMarkerTarget(Object hatch, ItemStack[] itemMarkers, FluidStack[] fluidMarkers,
-            int itemSlotOffset) {
-            this.hatch = hatch;
-            this.itemMarkers = itemMarkers;
-            this.fluidMarkers = fluidMarkers;
-            this.itemSlotOffset = itemSlotOffset;
-        }
-
-        private static RawMaterialMarkerTarget tryCreate(Object hatch) {
-            if (hatch == null) {
-                return null;
-            }
-            ItemStack[] dualItems = readItemArrayField(hatch, "i_mark");
-            FluidStack[] dualFluids = readFluidArrayField(hatch, "f_mark");
-            if (dualItems != null || dualFluids != null) {
-                return new RawMaterialMarkerTarget(hatch, dualItems, dualFluids, -1);
-            }
-            ItemStack[] itemMarkers = null;
-            int itemSlotOffset = -1;
-            ItemStack[] shadowInventory = readItemArrayField(hatch, "shadowInventory");
-            if (shadowInventory != null && hatch instanceof MTEHatchInputBus bus) {
-                itemMarkers = new ItemStack[shadowInventory.length];
-                itemSlotOffset = 0;
-                for (int i = 0; i < itemMarkers.length; i++) {
-                    itemMarkers[i] = bus.getStackInSlot(i);
-                }
-            }
-            FluidStack[] fluidMarkers = readFluidArrayField(hatch, "storedFluids");
-            if (itemMarkers == null && fluidMarkers == null) {
-                return null;
-            }
-            return new RawMaterialMarkerTarget(hatch, itemMarkers, fluidMarkers, itemSlotOffset);
-        }
-
-        private boolean isCombined() {
-            return itemMarkers != null && fluidMarkers != null;
-        }
-
-        private int itemCapacity() {
-            return itemMarkers == null ? 0 : itemMarkers.length;
-        }
-
-        private int fluidCapacity() {
-            return fluidMarkers == null ? 0 : fluidMarkers.length;
-        }
-
-        private void clear() {
-            setAutoPull(false);
-            if (itemMarkers != null) {
-                for (int i = 0; i < itemMarkers.length; i++) {
-                    setItemMarker(i, null);
-                }
-            }
-            if (fluidMarkers != null) {
-                for (int i = 0; i < fluidMarkers.length; i++) {
-                    setFluidMarker(i, null);
-                }
-            }
-            markTargetDirty();
-        }
-
-        private boolean addItem(ItemStack stack) {
-            if (itemMarkers == null || nextItemSlot >= itemMarkers.length) {
-                return false;
-            }
-            setItemMarker(nextItemSlot++, stack == null ? null : GTUtility.copyAmount(1, stack));
-            markTargetDirty();
-            return true;
-        }
-
-        private boolean addFluid(FluidStack stack) {
-            if (fluidMarkers == null || nextFluidSlot >= fluidMarkers.length) {
-                return false;
-            }
-            setFluidMarker(nextFluidSlot++, stack == null ? null : GTUtility.copyAmount(1, stack));
-            markTargetDirty();
-            return true;
-        }
-
-        private void setItemMarker(int slot, ItemStack stack) {
-            if (itemMarkers == null || slot < 0 || slot >= itemMarkers.length) {
-                return;
-            }
-            itemMarkers[slot] = stack == null ? null : stack.copy();
-            if (itemSlotOffset >= 0 && hatch instanceof MTEHatchInputBus bus) {
-                bus.setInventorySlotContents(itemSlotOffset + slot, stack == null ? null : stack.copy());
-            }
-            invoke(hatch, "updateInformationSlot", new Class<?>[] { int.class, ItemStack.class }, slot, stack);
-        }
-
-        private void setFluidMarker(int slot, FluidStack stack) {
-            if (fluidMarkers == null || slot < 0 || slot >= fluidMarkers.length) {
-                return;
-            }
-            fluidMarkers[slot] = stack == null ? null : stack.copy();
-            invoke(hatch, "updateInformationSlotF", new Class<?>[] { int.class }, slot);
-            invoke(hatch, "updateInformationSlot", new Class<?>[] { int.class }, slot);
-        }
-
-        private void setAutoPull(boolean enabled) {
-            invoke(hatch, "setAutoPullItemList", new Class<?>[] { boolean.class }, enabled);
-            invoke(hatch, "setAutoPullFluidList", new Class<?>[] { boolean.class }, enabled);
-        }
-
-        private void markTargetDirty() {
-            if (hatch instanceof IMetaTileEntity meta && meta.getBaseMetaTileEntity() != null) {
-                meta.getBaseMetaTileEntity()
-                    .markDirty();
-            }
-        }
-
-        private static ItemStack[] readItemArrayField(Object target, String name) {
-            Object value = readField(target, name);
-            return value instanceof ItemStack[]stacks ? stacks : null;
-        }
-
-        private static FluidStack[] readFluidArrayField(Object target, String name) {
-            Object value = readField(target, name);
-            return value instanceof FluidStack[]stacks ? stacks : null;
-        }
-
-        private static Object readField(Object target, String name) {
-            Field field = findField(target.getClass(), name);
-            if (field == null) {
-                return null;
-            }
-            try {
-                field.setAccessible(true);
-                return field.get(target);
-            } catch (IllegalAccessException ignored) {
-                return null;
-            }
-        }
-
-        private static Field findField(Class<?> type, String name) {
-            Class<?> current = type;
-            while (current != null) {
-                try {
-                    return current.getDeclaredField(name);
-                } catch (NoSuchFieldException ignored) {
-                    current = current.getSuperclass();
-                }
-            }
-            return null;
-        }
-
-        private static void invoke(Object target, String name, Class<?>[] parameterTypes, Object... args) {
-            Method method = findMethod(target.getClass(), name, parameterTypes);
-            if (method == null) {
-                return;
-            }
-            try {
-                method.setAccessible(true);
-                method.invoke(target, args);
-            } catch (ReflectiveOperationException ignored) {}
-        }
-
-        private static Method findMethod(Class<?> type, String name, Class<?>[] parameterTypes) {
-            Class<?> current = type;
-            while (current != null) {
-                try {
-                    return current.getDeclaredMethod(name, parameterTypes);
-                } catch (NoSuchMethodException ignored) {
-                    current = current.getSuperclass();
-                }
-            }
-            return null;
-        }
     }
 
     private int clampInputInt(int index) {

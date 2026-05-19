@@ -86,7 +86,7 @@ import com.nzoth.superfactory.common.process.runtime.OutputRouteType;
 import com.nzoth.superfactory.common.process.runtime.ProcessBufferUtil;
 import com.nzoth.superfactory.common.process.runtime.ProcessRuntimeMath;
 import com.nzoth.superfactory.common.process.runtime.RuntimeRouteResolver;
-import com.nzoth.superfactory.common.process.schedule.CandidateLayer;
+import com.nzoth.superfactory.common.process.schedule.IntegratedFactoryScheduler;
 import com.nzoth.superfactory.common.process.schedule.NodeCandidate;
 import com.nzoth.superfactory.common.ui.canvas.CanvasWidget;
 import com.nzoth.superfactory.common.ui.widget.RecipePatternSlotWidget;
@@ -232,6 +232,88 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     private final CycleRuntimeManager cycleRuntimeManager = new CycleRuntimeManager();
     private RuntimeRouteResolver runtimeRouteResolver = new RuntimeRouteResolver(null);
     private RuntimeResourceSnapshot runtimeResourceSnapshot;
+    private final IntegratedFactoryScheduler.Context schedulerContext = new IntegratedFactoryScheduler.Context() {
+
+        @Override
+        public List<ProcessNode> schedulingOrder() {
+            return buildSchedulingOrder();
+        }
+
+        @Override
+        public int runningJobsForNode(int nodeId) {
+            return countRunningJobsForNode(nodeId);
+        }
+
+        @Override
+        public int effectiveParallelLimit(ProcessNode node) {
+            return getEffectiveParallelLimit(node);
+        }
+
+        @Override
+        public int effectiveDurationTicks(ProcessNode node) {
+            return getEffectiveDurationTicks(node);
+        }
+
+        @Override
+        public boolean isExternalOutputThrottled(ProcessNode node, int parallel, boolean debugRuntime) {
+            return MTESuperIntegratedFactory.this.isExternalOutputThrottled(node, parallel, debugRuntime);
+        }
+
+        @Override
+        public int runnableParallel(ProcessNode node, int parallelLimit, boolean debugRuntime) {
+            return getRunnableParallel(node, parallelLimit, debugRuntime);
+        }
+
+        @Override
+        public boolean tryStartNodeCandidate(NodeCandidate candidate, boolean debugRuntime) {
+            return MTESuperIntegratedFactory.this.tryStartNodeCandidate(candidate, debugRuntime);
+        }
+
+        @Override
+        public int maxNodeStartsPerTick() {
+            return getMaxNodeStartsPerTick();
+        }
+
+        @Override
+        public void updateRunCredits() {
+            MTESuperIntegratedFactory.this.updateRunCredits();
+        }
+
+        @Override
+        public double runCredit(int nodeId) {
+            return runCreditByNode.getOrDefault(nodeId, 0.0D);
+        }
+
+        @Override
+        public void subtractRunCredit(int nodeId, double amount) {
+            runCreditByNode.put(nodeId, Math.max(0.0D, runCreditByNode.getOrDefault(nodeId, 0.0D) - amount));
+        }
+
+        @Override
+        public int distanceToTerminal(ProcessNode node) {
+            return MTESuperIntegratedFactory.this.distanceToTerminal(node, new LinkedHashMap<>());
+        }
+
+        @Override
+        public boolean consumesAvailableInternalInput(ProcessNode node) {
+            return MTESuperIntegratedFactory.this.consumesAvailableInternalInput(node);
+        }
+
+        @Override
+        public boolean suppliesLowWater(ProcessNode node) {
+            return MTESuperIntegratedFactory.this.suppliesLowWater(node);
+        }
+
+        @Override
+        public boolean producesTargetOutput(ProcessNode node) {
+            return MTESuperIntegratedFactory.this.producesTargetOutput(node);
+        }
+
+        @Override
+        public boolean hasIncomingEdge(int nodeId) {
+            return MTESuperIntegratedFactory.this.hasIncomingEdge(nodeId);
+        }
+    };
     private int factoryMode = MODE_STANDBY;
     private int ioCycleTicks;
     private long lastEnergySetupFailureLogTick = Long.MIN_VALUE;
@@ -2983,54 +3065,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private void scheduleRunnableNodes(boolean debugRuntime) {
-        updateRunCredits();
-        int starts = 0;
-        for (CandidateLayer layer : CandidateLayer.values()) {
-            for (NodeCandidate candidate : buildNodeCandidates(layer, debugRuntime)) {
-                if (starts >= getMaxNodeStartsPerTick()) {
-                    return;
-                }
-                if (tryStartNodeCandidate(candidate, debugRuntime)) {
-                    starts++;
-                    runCreditByNode.put(
-                        candidate.node.id,
-                        Math.max(0.0D, runCreditByNode.getOrDefault(candidate.node.id, 0.0D) - 1.0D));
-                }
-            }
-        }
-    }
-
-    private List<NodeCandidate> buildNodeCandidates(CandidateLayer layer, boolean debugRuntime) {
-        ArrayList<NodeCandidate> candidates = new ArrayList<>();
-        for (ProcessNode node : buildSchedulingOrder()) {
-            if (countRunningJobsForNode(node.id) > 0) {
-                continue;
-            }
-            int effectiveParallelLimit = getEffectiveParallelLimit(node);
-            int effectiveDurationTicks = getEffectiveDurationTicks(node);
-            if (!node.locked || effectiveParallelLimit <= 0 || effectiveDurationTicks <= 0) {
-                continue;
-            }
-            if (classifyCandidateLayer(node) != layer
-                || isExternalOutputThrottled(node, effectiveParallelLimit, debugRuntime)) {
-                continue;
-            }
-            int parallel = getRunnableParallel(node, effectiveParallelLimit, debugRuntime);
-            if (parallel > 0) {
-                candidates.add(
-                    new NodeCandidate(
-                        node,
-                        parallel,
-                        layer,
-                        runCreditByNode.getOrDefault(node.id, 0.0D),
-                        distanceToTerminal(node, new LinkedHashMap<>())));
-            }
-        }
-        candidates.sort(
-            Comparator.comparingDouble((NodeCandidate candidate) -> -candidate.runCredit)
-                .thenComparingInt(candidate -> candidate.targetDistance)
-                .thenComparingInt(candidate -> candidate.node.id));
-        return candidates;
+        IntegratedFactoryScheduler.schedule(schedulerContext, debugRuntime);
     }
 
     private boolean tryStartNodeCandidate(NodeCandidate candidate, boolean debugRuntime) {
@@ -3078,19 +3113,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
 
     private int getMaxNodeStartsPerTick() {
         return Math.max(1, Config.superIntegratedFactoryMaxNodeStartsPerTick);
-    }
-
-    private CandidateLayer classifyCandidateLayer(ProcessNode node) {
-        if (consumesAvailableInternalInput(node)) {
-            return CandidateLayer.INTERNAL_CONSUME;
-        }
-        if (suppliesLowWater(node)) {
-            return CandidateLayer.LOW_WATER_SUPPLY;
-        }
-        if (producesTargetOutput(node)) {
-            return CandidateLayer.TARGET_PROGRESS;
-        }
-        return hasIncomingEdge(node.id) ? CandidateLayer.FORCED_PROGRESS : CandidateLayer.SOURCE_PRODUCTION;
     }
 
     private List<ProcessNode> buildSchedulingOrder() {

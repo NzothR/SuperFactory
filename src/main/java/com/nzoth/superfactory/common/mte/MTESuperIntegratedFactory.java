@@ -89,6 +89,7 @@ import com.nzoth.superfactory.common.process.runtime.RuntimeRouteResolver;
 import com.nzoth.superfactory.common.process.schedule.IntegratedFactoryScheduler;
 import com.nzoth.superfactory.common.process.schedule.NodeCandidate;
 import com.nzoth.superfactory.common.process.submit.IntegratedFactoryUnloadHandler;
+import com.nzoth.superfactory.common.process.watermark.IntegratedFactoryWatermarks;
 import com.nzoth.superfactory.common.ui.canvas.CanvasWidget;
 import com.nzoth.superfactory.common.ui.widget.RecipePatternSlotWidget;
 
@@ -401,6 +402,38 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         @Override
         public void markDirty() {
             getBaseMetaTileEntity().markDirty();
+        }
+    };
+    private final IntegratedFactoryWatermarks.Context watermarkContext = new IntegratedFactoryWatermarks.Context() {
+
+        @Override
+        public Iterable<ProcessEdge> runtimeEdges() {
+            return runtimeGraph.edges;
+        }
+
+        @Override
+        public ProcessNode findRuntimeNode(int nodeId) {
+            return MTESuperIntegratedFactory.this.findRuntimeNode(nodeId);
+        }
+
+        @Override
+        public boolean itemMatches(ItemStack recipeInput, ItemStack provided) {
+            return MTESuperIntegratedFactory.this.itemMatches(recipeInput, provided);
+        }
+
+        @Override
+        public long stackAmount(ItemStack stack) {
+            return getStackAmount(stack);
+        }
+
+        @Override
+        public int effectiveParallelLimit(ProcessNode node) {
+            return getEffectiveParallelLimit(node);
+        }
+
+        @Override
+        public int effectiveDurationTicks(ProcessNode node) {
+            return getEffectiveDurationTicks(node);
         }
     };
     private int factoryMode = MODE_STANDBY;
@@ -4191,60 +4224,23 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private long getInternalItemLowWater(ProcessNode producer, ItemStack output, long perRun) {
-        long lowWater = Math
-            .max(getOutputThroughputPerSecond(producer, perRun), getOutputBatchAmount(producer, perRun));
-        for (ProcessEdge edge : runtimeGraph.edges) {
-            if (edge.fromNodeId != producer.id) {
-                continue;
-            }
-            ProcessNode consumer = findRuntimeNode(edge.toNodeId);
-            if (consumer == null) {
-                continue;
-            }
-            for (int slot = 0; slot < consumer.inputHandler.getSlots(); slot++) {
-                ItemStack input = consumer.inputHandler.getStackInSlot(slot);
-                if (input != null && !isFluidDisplay(input) && itemMatches(input, output)) {
-                    lowWater = Math
-                        .max(lowWater, safeMultiply(getStackAmount(input), getEffectiveParallelLimit(consumer)));
-                }
-            }
-        }
-        return Math.max(1L, lowWater);
+        return IntegratedFactoryWatermarks.internalItemLowWater(watermarkContext, producer, output, perRun);
     }
 
     private long getInternalFluidLowWater(ProcessNode producer, FluidStack output, long perRun) {
-        long lowWater = Math
-            .max(getOutputThroughputPerSecond(producer, perRun), getOutputBatchAmount(producer, perRun));
-        for (ProcessEdge edge : runtimeGraph.edges) {
-            if (edge.fromNodeId != producer.id) {
-                continue;
-            }
-            ProcessNode consumer = findRuntimeNode(edge.toNodeId);
-            if (consumer == null) {
-                continue;
-            }
-            for (int slot = 0; slot < consumer.inputHandler.getSlots(); slot++) {
-                FluidStack input = GTUtility.getFluidFromDisplayStack(consumer.inputHandler.getStackInSlot(slot));
-                if (input != null && input.isFluidEqual(output)) {
-                    lowWater = Math
-                        .max(lowWater, safeMultiply(Math.max(1L, input.amount), getEffectiveParallelLimit(consumer)));
-                }
-            }
-        }
-        return Math.max(1L, lowWater);
+        return IntegratedFactoryWatermarks.internalFluidLowWater(watermarkContext, producer, output, perRun);
     }
 
     private long getExternalItemLowWater(ProcessNode producer, long perRun) {
-        return Math.max(getOutputThroughputPerSecond(producer, perRun), getOutputBatchAmount(producer, perRun));
+        return IntegratedFactoryWatermarks.externalLowWater(watermarkContext, producer, perRun);
     }
 
     private long getExternalFluidLowWater(ProcessNode producer, long perRun) {
-        return Math.max(getOutputThroughputPerSecond(producer, perRun), getOutputBatchAmount(producer, perRun));
+        return IntegratedFactoryWatermarks.externalLowWater(watermarkContext, producer, perRun);
     }
 
     private long getInternalHighWater(long lowWater) {
-        long minimumHigh = lowWater == Long.MAX_VALUE ? Long.MAX_VALUE : lowWater + 1L;
-        return Math.max(minimumHigh, safeCeilMultiply(lowWater, 3L, 1L));
+        return IntegratedFactoryWatermarks.highWater(lowWater);
     }
 
     private long getExternalHighWater(long lowWater) {
@@ -4252,18 +4248,15 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private long getOutputThroughputPerSecond(ProcessNode producer, long perRun) {
-        long duration = getWaterlineDuration(producer);
-        long perTick = getOutputBatchAmount(producer, perRun);
-        long perSecond = safeCeilMultiply(perTick, 20L, duration);
-        return Math.max(1L, perSecond);
+        return IntegratedFactoryWatermarks.outputThroughputPerSecond(watermarkContext, producer, perRun);
     }
 
     private long getOutputBatchAmount(ProcessNode producer, long perRun) {
-        return Math.max(1L, perRun);
+        return IntegratedFactoryWatermarks.outputBatchAmount(perRun);
     }
 
     private long getWaterlineDuration(ProcessNode producer) {
-        return Math.max(1L, getEffectiveDurationTicks(producer));
+        return IntegratedFactoryWatermarks.waterlineDuration(watermarkContext, producer);
     }
 
     private void logInternalThrottle(boolean debugRuntime, ProcessNode node, String output, long stored, long lowWater,

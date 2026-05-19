@@ -71,7 +71,7 @@ public final class IntegratedFactoryScheduler {
         if (context.producesTargetOutput(node)) {
             return CandidateLayer.TARGET_PROGRESS;
         }
-        return context.hasIncomingEdge(node.id) ? CandidateLayer.FORCED_PROGRESS : CandidateLayer.SOURCE_PRODUCTION;
+        return CandidateLayer.SOURCE_PRODUCTION;
     }
 
     public interface Context {
@@ -105,7 +105,5 @@ public final class IntegratedFactoryScheduler {
         boolean suppliesLowWater(ProcessNode node);
 
         boolean producesTargetOutput(ProcessNode node);
-
-        boolean hasIncomingEdge(int nodeId);
     }
 }

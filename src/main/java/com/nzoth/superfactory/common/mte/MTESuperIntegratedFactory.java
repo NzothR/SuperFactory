@@ -297,11 +297,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         public boolean producesTargetOutput(ProcessNode node) {
             return MTESuperIntegratedFactory.this.producesTargetOutput(node);
         }
-
-        @Override
-        public boolean hasIncomingEdge(int nodeId) {
-            return MTESuperIntegratedFactory.this.hasIncomingEdge(nodeId);
-        }
     };
     private final IntegratedFactoryUnloadHandler.Context unloadContext = new IntegratedFactoryUnloadHandler.Context() {
 
@@ -959,6 +954,10 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         ProcessGraph submittedGraph = new ProcessGraph();
         submittedGraph.readFromNBT(processGraph.writeToNBT());
         GraphAnalysisResult submittedAnalysis = analyzeProcessGraph(submittedGraph, "pending-submit");
+        if (submittedAnalysis.validation.hasErrors()) {
+            rejectSubmittedProcessGraph(submittedAnalysis);
+            return;
+        }
         submittedProcessGraphSnapshot.readFromNBT(processGraph.writeToNBT());
         if (factoryMode == MODE_OUTPUT) {
             deferredProcessRequirements.readFromNBT(incoming.writeToNBT());
@@ -971,6 +970,23 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         applySubmittedProcessPlan(incoming, submittedGraph, submittedAnalysis);
         factoryMode = MODE_OUTPUT;
         ioCycleTicks = 0;
+        getBaseMetaTileEntity().markDirty();
+    }
+
+    private void rejectSubmittedProcessGraph(GraphAnalysisResult submittedAnalysis) {
+        GraphValidationError firstError = null;
+        for (GraphValidationError entry : submittedAnalysis.validation.entries()) {
+            if (entry.severity == GraphValidationError.Severity.ERROR) {
+                firstError = entry;
+                break;
+            }
+        }
+        String message = firstError == null ? "工序图分析失败" : firstError.message;
+        SuperFactory.LOG.warn("[Super Integrated Factory/GraphAnalysis] 拒绝提交: {}", message);
+        EntityPlayer owner = findOnlineOwner(getBaseMetaTileEntity());
+        if (owner != null) {
+            sendProcessCanvasStatus(owner, EnumChatFormatting.RED + message, 0xFFFF7777);
+        }
         getBaseMetaTileEntity().markDirty();
     }
 
@@ -1893,11 +1909,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         }
         try {
             flushOutputBuffers();
-            if (hasExternalOutputs() && runningJobs.isEmpty()) {
-                clearMachineWorkDisplay();
-                getBaseMetaTileEntity().markDirty();
-                return;
-            }
             runtimeResourceSnapshot = buildRuntimeResourceSnapshot();
             advanceRunningJobs();
             if (!isWirelessModeEnabled() && !runningJobs.isEmpty() && !canSustainWiredRuntimePower()) {
@@ -2334,15 +2345,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     private boolean hasOutgoingEdge(int nodeId) {
         for (ProcessEdge edge : runtimeGraph.edges) {
             if (edge.fromNodeId == nodeId && edge.toNodeId != nodeId) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean hasIncomingEdge(int nodeId) {
-        for (ProcessEdge edge : runtimeGraph.edges) {
-            if (edge.toNodeId == nodeId && edge.fromNodeId != nodeId) {
                 return true;
             }
         }
@@ -3711,10 +3713,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
                 fluidIterator.remove();
             }
         }
-    }
-
-    private boolean hasExternalOutputs() {
-        return !outputItems.isEmpty() || !outputFluids.isEmpty();
     }
 
     private int getIntegratedOutputFlushEntryBudget() {

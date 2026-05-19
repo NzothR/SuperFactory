@@ -86,6 +86,8 @@ import com.nzoth.superfactory.common.process.runtime.OutputRouteType;
 import com.nzoth.superfactory.common.process.runtime.ProcessBufferUtil;
 import com.nzoth.superfactory.common.process.runtime.ProcessRuntimeMath;
 import com.nzoth.superfactory.common.process.runtime.RuntimeRouteResolver;
+import com.nzoth.superfactory.common.process.schedule.CandidateLayer;
+import com.nzoth.superfactory.common.process.schedule.NodeCandidate;
 import com.nzoth.superfactory.common.ui.canvas.CanvasWidget;
 import com.nzoth.superfactory.common.ui.widget.RecipePatternSlotWidget;
 
@@ -216,7 +218,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     /** Hysteresis flags for final/byproduct outputs waiting for real output buses or hatches. */
     private final Set<String> throttledExternalItemOutputs = new HashSet<>();
     private final Set<String> throttledExternalFluidOutputs = new HashSet<>();
-    /** Active virtual recipe jobs. Each job owns its consumed inputs so OUTPUT can abort it losslessly. */
+    /** Active virtual recipe jobs. Each job records consumed inputs for diagnostics and NBT restore. */
     private final List<RunningJob> runningJobs = new ArrayList<>();
     /** Synced, fixed-size source for the main GUI runtime output estimate lines. */
     private List<String> runtimeOutputEstimateLines = new ArrayList<>();
@@ -5123,19 +5125,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         internalFluids.clear();
     }
 
-    private void abortRunningJobsToInternalCache() {
-        for (RunningJob job : runningJobs) {
-            for (ItemStack stack : job.consumedItems) {
-                addItemToBuffer(internalItems, stack, getStackAmount(stack));
-            }
-            for (FluidStack stack : job.consumedFluids) {
-                addFluidToBuffer(internalFluids, stack, stack.amount);
-            }
-            refundRuntimeEnergy(job.reservedEnergy);
-        }
-        runningJobs.clear();
-    }
-
     private void discardRunningJobsForPowerLoss() {
         for (RunningJob job : runningJobs) {
             refundRuntimeEnergy(job.reservedEnergy);
@@ -5714,32 +5703,6 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
 
         RuntimeOutputKind(EnumChatFormatting color) {
             this.color = color;
-        }
-    }
-
-    private enum CandidateLayer {
-        FORCED_PROGRESS,
-        INTERNAL_CONSUME,
-        TARGET_PROGRESS,
-        LOW_WATER_SUPPLY,
-        SOURCE_PRODUCTION
-    }
-
-    private static final class NodeCandidate {
-
-        private final ProcessNode node;
-        private final int actualParallel;
-        private final CandidateLayer layer;
-        private final double runCredit;
-        private final int targetDistance;
-
-        private NodeCandidate(ProcessNode node, int actualParallel, CandidateLayer layer, double runCredit,
-            int targetDistance) {
-            this.node = node;
-            this.actualParallel = actualParallel;
-            this.layer = layer;
-            this.runCredit = runCredit;
-            this.targetDistance = targetDistance;
         }
     }
 

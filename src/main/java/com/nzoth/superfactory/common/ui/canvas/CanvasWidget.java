@@ -268,9 +268,52 @@ public class CanvasWidget extends Widget implements Interactable, ISyncedWidget 
                 drawSelfLoop(from, 0xFF71C7EC);
                 continue;
             }
-            drawLine(x1, y1, x2, y2, 0xFF71C7EC);
-            drawArrowHead(x1, y1, x2, y2);
+            if (x2 <= x1 || hasPath(edge.toNodeId, edge.fromNodeId, edge.id)) {
+                drawBackEdge(from, to, 0xFF71C7EC);
+            } else {
+                drawLine(x1, y1, x2, y2, 0xFF71C7EC);
+                drawArrowHead(x1, y1, x2, y2);
+            }
         }
+    }
+
+    private void drawBackEdge(ProcessNode from, ProcessNode to, int color) {
+        int fromRight = worldToScreenX(from.x + ProcessNode.WIDTH);
+        int toLeft = worldToScreenX(to.x);
+        int fromY = worldToScreenY(from.y + ProcessNode.HEIGHT / 2);
+        int toY = worldToScreenY(to.y + ProcessNode.HEIGHT / 2);
+        int top = Math.min(worldToScreenY(from.y), worldToScreenY(to.y));
+        int elbowY = top - scale(28);
+        int rightOut = fromRight + scale(18);
+        int leftOut = toLeft - scale(18);
+        drawLine(fromRight, fromY, rightOut, fromY, color);
+        drawLine(rightOut, fromY, rightOut, elbowY, color);
+        drawLine(rightOut, elbowY, leftOut, elbowY, color);
+        drawLine(leftOut, elbowY, leftOut, toY, color);
+        drawLine(leftOut, toY, toLeft, toY, color);
+        drawArrowHead(leftOut, toY, toLeft, toY);
+    }
+
+    private boolean hasPath(int fromNodeId, int toNodeId, int ignoredEdgeId) {
+        return hasPath(fromNodeId, toNodeId, ignoredEdgeId, new java.util.HashSet<>());
+    }
+
+    private boolean hasPath(int currentNodeId, int toNodeId, int ignoredEdgeId, java.util.Set<Integer> visited) {
+        if (currentNodeId == toNodeId) {
+            return true;
+        }
+        if (!visited.add(currentNodeId)) {
+            return false;
+        }
+        for (ProcessEdge edge : graph.edges) {
+            if (edge.id == ignoredEdgeId || edge.fromNodeId != currentNodeId) {
+                continue;
+            }
+            if (hasPath(edge.toNodeId, toNodeId, ignoredEdgeId, visited)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void drawSelfLoop(ProcessNode node, int color) {
@@ -305,7 +348,7 @@ public class CanvasWidget extends Widget implements Interactable, ISyncedWidget 
             drawOutline(x, y, width, height, border);
             Minecraft.getMinecraft().fontRenderer
                 .drawString(getNodeTitle(node), x + scale(4), y + scale(3), 0xFFFFFFFF);
-            String state = node.endNode ? "END" : node.locked ? "LOCKED" : "DRAFT";
+            String state = node.endNode ? "TARGET" : node.locked ? "LOCKED" : "DRAFT";
             Minecraft.getMinecraft().fontRenderer.drawString(state, x + scale(4), y + scale(22), border);
         }
     }

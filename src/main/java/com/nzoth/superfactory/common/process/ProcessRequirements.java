@@ -135,7 +135,7 @@ public final class ProcessRequirements {
             }
         }
         for (RecipeMapDemand demand : recipeMaps) {
-            if (demand.stored > 0) {
+            if (demand.totalStored() > 0) {
                 return true;
             }
         }
@@ -220,6 +220,7 @@ public final class ProcessRequirements {
         public String displayName;
         public int required;
         public int stored;
+        public int proxyStored;
 
         public RecipeMapDemand(String recipeMapName, String displayName, int required) {
             this.recipeMapName = recipeMapName == null ? "" : recipeMapName;
@@ -228,7 +229,11 @@ public final class ProcessRequirements {
         }
 
         public int missing() {
-            return Math.max(0, required - stored);
+            return Math.max(0, required - stored - proxyStored);
+        }
+
+        public int totalStored() {
+            return Math.max(0, stored) + Math.max(0, proxyStored);
         }
 
         private NBTTagCompound writeToNBT() {
@@ -237,6 +242,7 @@ public final class ProcessRequirements {
             tag.setString("DisplayName", displayName == null ? "" : displayName);
             tag.setInteger("Required", required);
             tag.setInteger("Stored", stored);
+            tag.setInteger("ProxyStored", proxyStored);
             return tag;
         }
 
@@ -246,6 +252,7 @@ public final class ProcessRequirements {
                 tag.getString("DisplayName"),
                 tag.getInteger("Required"));
             demand.stored = Math.max(0, tag.getInteger("Stored"));
+            demand.proxyStored = Math.max(0, tag.getInteger("ProxyStored"));
             return demand;
         }
     }

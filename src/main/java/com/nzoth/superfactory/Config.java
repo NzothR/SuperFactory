@@ -18,6 +18,11 @@ public class Config {
     public static int superProxyFactorySuccessfulRecipeCacheSize = 64;
     public static int superProxyFactoryPendingOutputEntryLimit = 64;
     public static int superIntegratedFactoryMaxOutputFlushEntriesPerTick = 128;
+    public static int superIntegratedFactoryMaxNodeStartsPerTick = 16;
+    public static int superIntegratedFactoryLookaheadTicks = 20;
+    public static boolean debugExportIntegratedFactoryInternalBuffer = false;
+    public static boolean debugIntegratedFactoryRuntime = false;
+    public static boolean allowProxyFactoryAsIntegratedRecipeHost = true;
     private static File boundConfigFile;
 
     public static void synchronizeConfiguration(File configFile) {
@@ -92,6 +97,35 @@ public class Config {
             0,
             4096,
             "Maximum number of Integrated Factory buffered item/fluid output entries flushed per tick. Set to 0 for unlimited.");
+        superIntegratedFactoryMaxNodeStartsPerTick = configuration.getInt(
+            "superIntegratedFactoryMaxNodeStartsPerTick",
+            Configuration.CATEGORY_GENERAL,
+            superIntegratedFactoryMaxNodeStartsPerTick,
+            1,
+            1024,
+            "Maximum number of Integrated Factory process nodes started per tick.");
+        superIntegratedFactoryLookaheadTicks = configuration.getInt(
+            "superIntegratedFactoryLookaheadTicks",
+            Configuration.CATEGORY_GENERAL,
+            superIntegratedFactoryLookaheadTicks,
+            0,
+            200,
+            "Running job lookahead window in ticks for Integrated Factory projected watermarks.");
+        debugExportIntegratedFactoryInternalBuffer = configuration.getBoolean(
+            "debugExportIntegratedFactoryInternalBuffer",
+            Configuration.CATEGORY_GENERAL,
+            debugExportIntegratedFactoryInternalBuffer,
+            "Debug only: export Integrated Factory internal intermediate buffers during OUTPUT instead of discarding them.");
+        debugIntegratedFactoryRuntime = configuration.getBoolean(
+            "debugIntegratedFactoryRuntime",
+            Configuration.CATEGORY_GENERAL,
+            debugIntegratedFactoryRuntime,
+            "Debug only: log Integrated Factory runtime scheduling, input bottlenecks, and waterline throttling.");
+        allowProxyFactoryAsIntegratedRecipeHost = configuration.getBoolean(
+            "allowProxyFactoryAsIntegratedRecipeHost",
+            Configuration.CATEGORY_GENERAL,
+            allowProxyFactoryAsIntegratedRecipeHost,
+            "Allow Super Proxy Factory controllers to substitute missing Integrated Factory recipe host controllers.");
 
         if (configuration.hasChanged()) {
             configuration.save();

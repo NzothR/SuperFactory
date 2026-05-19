@@ -38,6 +38,10 @@ import com.nzoth.superfactory.common.process.ProcessEdge;
 import com.nzoth.superfactory.common.process.ProcessGraph;
 import com.nzoth.superfactory.common.process.ProcessNode;
 import com.nzoth.superfactory.common.process.ProcessRequirements;
+import com.nzoth.superfactory.common.process.analysis.CycleInfo;
+import com.nzoth.superfactory.common.process.analysis.GraphAnalysisResult;
+import com.nzoth.superfactory.common.process.analysis.ProcessGraphAnalyzer;
+import com.nzoth.superfactory.common.process.key.MaterialKey;
 
 import codechicken.nei.ItemPanels;
 import codechicken.nei.recipe.GuiCraftingRecipe;
@@ -115,6 +119,9 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     private boolean importSelectorOpen;
     private List<File> importGraphFiles = new ArrayList<>();
     private int importScroll;
+    private GraphAnalysisResult cachedClientGraphAnalysis;
+    private int cachedClientGraphNodeCount = -1;
+    private int cachedClientGraphEdgeCount = -1;
 
     public GuiSuperIntegratedFactoryProcess(MTESuperIntegratedFactory factory) {
         this.factory = factory;
@@ -536,6 +543,8 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             if (from != null && to != null) {
                 if (from.id == to.id) {
                     drawSelfLoop(from, 0xFF71C7EC);
+                } else if (isBackOrCycleEdge(edge, from, to)) {
+                    drawBackEdge(from, to, 0xFF71C7EC);
                 } else {
                     drawFlowLine(
                         worldToScreenX(from.x + ProcessNode.WIDTH),
@@ -549,6 +558,32 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (draggingEdge) {
             drawFlowLine(edgeDragStartX, edgeDragStartY, lastMouseX, lastMouseY, 0xFFFFFFFF);
         }
+    }
+
+    private boolean isBackOrCycleEdge(ProcessEdge edge, ProcessNode from, ProcessNode to) {
+        int fromRight = worldToScreenX(from.x + ProcessNode.WIDTH);
+        int toLeft = worldToScreenX(to.x);
+        return toLeft <= fromRight;
+    }
+
+    private void drawBackEdge(ProcessNode from, ProcessNode to, int color) {
+        int fromTopX = worldToScreenX(from.x + ProcessNode.WIDTH / 2);
+        int toTopX = worldToScreenX(to.x + ProcessNode.WIDTH / 2);
+        int fromTopY = worldToScreenY(from.y);
+        int toTopY = worldToScreenY(to.y);
+        int laneY = Math.min(fromTopY, toTopY) - Math.max(36, scale(36));
+        int fromStemY = fromTopY - Math.max(4, scale(4));
+        int toStemY = toTopY - Math.max(4, scale(4));
+
+        drawSegment(fromTopX, fromTopY, fromTopX, laneY, color);
+        drawSegment(fromTopX, laneY, toTopX, laneY, color);
+        drawSegment(toTopX, laneY, toTopX, toStemY, color);
+        drawRect(
+            toTopX - Math.max(3, scale(3)),
+            toTopY - Math.max(1, scale(1)),
+            toTopX + Math.max(4, scale(4)),
+            toTopY,
+            color);
     }
 
     private void drawNodes() {
@@ -569,7 +604,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             drawOutline(x, y, w, h, border);
             float textScale = getNodeTextScale();
             drawScaledNodeString(safeNodeName(node), x + scale(4), y + scale(3), w - scale(8), 0xFFFFFFFF, textScale);
-            String state = node.endNode ? tr("superfactory.machine.super_integrated_factory.node_state.end")
+            String state = node.endNode ? tr("superfactory.machine.super_integrated_factory.node_state.target")
                 : node.locked ? tr("superfactory.machine.super_integrated_factory.node_state.locked")
                     : tr("superfactory.machine.super_integrated_factory.node_state.draft");
             drawScaledNodeString(
@@ -720,11 +755,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             buttonY,
             48,
             16,
-            editingNode.endNode ? tr("superfactory.machine.super_integrated_factory.node_state.end") + "*"
-                : tr("superfactory.machine.super_integrated_factory.node_state.end"),
+            editingNode.endNode ? tr("superfactory.machine.super_integrated_factory.node_state.target") + "*"
+                : tr("superfactory.machine.super_integrated_factory.node_state.target"),
             mouseX,
             mouseY,
-            allowEditorTooltips ? tr("superfactory.machine.super_integrated_factory.node_editor.end_node") : "");
+            allowEditorTooltips ? tr("superfactory.machine.super_integrated_factory.node_editor.target_node") : "");
         drawEditorButton(
             x + 68,
             buttonY,
@@ -846,11 +881,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             buttonY,
             48,
             16,
-            editingNode.endNode ? tr("superfactory.machine.super_integrated_factory.node_state.end") + "*"
-                : tr("superfactory.machine.super_integrated_factory.node_state.end"),
+            editingNode.endNode ? tr("superfactory.machine.super_integrated_factory.node_state.target") + "*"
+                : tr("superfactory.machine.super_integrated_factory.node_state.target"),
             mouseX,
             mouseY,
-            allowEditorTooltips ? tr("superfactory.machine.super_integrated_factory.node_editor.end_node") : "");
+            allowEditorTooltips ? tr("superfactory.machine.super_integrated_factory.node_editor.target_node") : "");
         drawEditorButton(
             x + 68,
             buttonY,
@@ -4000,15 +4035,6 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             return ProcessBuildResult
                 .error(tr("superfactory.machine.super_integrated_factory.process.error.no_end_node"));
         }
-        if (endNodes.size() > 1 && hasAnyCycle(relevantNodes)) {
-            return ProcessBuildResult
-                .error(tr("superfactory.machine.super_integrated_factory.process.error.multi_end_cycle"));
-        }
-        ProcessNode endNode = endNodes.get(0);
-        if (hasIllegalCycle(endNode, relevantNodes)) {
-            return ProcessBuildResult
-                .error(tr("superfactory.machine.super_integrated_factory.process.error.illegal_cycle"));
-        }
         ProcessBuildResult result = ProcessBuildResult.ok();
         result.nodes = relevantNodes;
         result.endNodes = endNodes;
@@ -4041,46 +4067,29 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         }
     }
 
-    private boolean hasIllegalCycle(ProcessNode endNode, List<ProcessNode> relevantNodes) {
-        return hasCycleOutsideAllowedEnd(endNode.id, relevantNodes);
-    }
-
     private boolean hasAnyCycle(List<ProcessNode> relevantNodes) {
-        return hasCycleOutsideAllowedEnd(null, relevantNodes);
-    }
-
-    private boolean hasCycleOutsideAllowedEnd(Integer allowedEndNodeId, List<ProcessNode> relevantNodes) {
         Set<Integer> relevantIds = new HashSet<>();
         for (ProcessNode node : relevantNodes) {
             relevantIds.add(node.id);
         }
         for (ProcessNode node : relevantNodes) {
             List<Integer> path = new ArrayList<>();
-            if (hasCycleOutsideAllowedEndFrom(node.id, allowedEndNodeId, relevantIds, path)) {
+            if (hasCycleFrom(node.id, relevantIds, path)) {
                 return true;
             }
         }
         return false;
     }
 
-    private boolean hasCycleOutsideAllowedEndFrom(int nodeId, Integer allowedEndNodeId, Set<Integer> relevantIds,
-        List<Integer> path) {
+    private boolean hasCycleFrom(int nodeId, Set<Integer> relevantIds, List<Integer> path) {
         int existingIndex = path.indexOf(nodeId);
         if (existingIndex >= 0) {
-            if (allowedEndNodeId == null) {
-                return true;
-            }
-            for (int i = existingIndex; i < path.size(); i++) {
-                if (path.get(i) == allowedEndNodeId) {
-                    return false;
-                }
-            }
-            return nodeId != allowedEndNodeId;
+            return true;
         }
         path.add(nodeId);
         for (ProcessEdge edge : graph.edges) {
             if (edge.fromNodeId == nodeId && relevantIds.contains(edge.toNodeId)
-                && hasCycleOutsideAllowedEndFrom(edge.toNodeId, allowedEndNodeId, relevantIds, path)) {
+                && hasCycleFrom(edge.toNodeId, relevantIds, path)) {
                 return true;
             }
         }
@@ -4133,14 +4142,18 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     private List<BalanceFraction[]> buildBalanceEquations(List<ProcessNode> relevantNodes, Set<Integer> relevantIds,
         Map<Integer, Integer> nodeColumns, int variableCount) {
         List<BalanceFraction[]> equations = new ArrayList<>();
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
         for (ProcessNode producer : relevantNodes) {
             if (producer.isRecyclerNode()) {
-                addRecyclerBalanceEquations(equations, producer, relevantIds, nodeColumns, variableCount);
+                addRecyclerBalanceEquations(equations, producer, relevantIds, nodeColumns, variableCount, analysis);
                 continue;
             }
             for (int outputSlot = 0; outputSlot < producer.outputHandler.getSlots(); outputSlot++) {
                 ItemStack output = producer.outputHandler.getStackInSlot(outputSlot);
                 if (output == null) {
+                    continue;
+                }
+                if (isBalanceFreeOutput(producer, output, analysis)) {
                     continue;
                 }
                 BalanceFraction[] equation = newZeroEquation(variableCount);
@@ -4171,13 +4184,16 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void addRecyclerBalanceEquations(List<BalanceFraction[]> equations, ProcessNode recycler,
-        Set<Integer> relevantIds, Map<Integer, Integer> nodeColumns, int size) {
+        Set<Integer> relevantIds, Map<Integer, Integer> nodeColumns, int size, GraphAnalysisResult analysis) {
         if (recycler.outputHandler.getStackInSlot(0) == null) {
             return;
         }
         for (int outputSlot = 0; outputSlot < recycler.outputHandler.getSlots(); outputSlot++) {
             ItemStack recyclerOutput = recycler.outputHandler.getStackInSlot(outputSlot);
             if (recyclerOutput == null) {
+                continue;
+            }
+            if (isBalanceFreeOutput(recycler, recyclerOutput, analysis)) {
                 continue;
             }
             List<ProcessNode> consumers = matchingDirectConsumers(recycler.id, recyclerOutput, relevantIds, false);
@@ -4195,6 +4211,19 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
             equations.add(equation);
         }
+    }
+
+    private boolean isBalanceFreeOutput(ProcessNode producer, ItemStack output, GraphAnalysisResult analysis) {
+        MaterialKey key = materialKeyOf(output);
+        if (key == null || analysis == null) {
+            return false;
+        }
+        if (analysis.cycleByMaterial.containsKey(key)) {
+            return true;
+        }
+        return analysis.allTargetOutputs.contains(key)
+            || analysis.targetOutputsByNode.getOrDefault(producer.id, java.util.Collections.emptySet())
+                .contains(key);
     }
 
     private void addRecyclerProducerTerms(BalanceFraction[] equation, ProcessNode recycler, int recyclerOutputSlot,
@@ -4600,10 +4629,34 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
 
     private EstimateKind classifyEstimateKind(ProcessNode node, ItemStack output, List<ProcessNode> relevantNodes) {
         boolean consumed = firstConsumerForOutput(node, output, relevantNodes) != null;
-        if (node.endNode && consumed) {
+        if (isCycleMaterial(output) && consumed) {
             return EstimateKind.CYCLIC;
         }
-        return consumed ? EstimateKind.INTERNAL : EstimateKind.FINAL;
+        return consumed && !isTargetOutput(node, output) ? EstimateKind.INTERNAL : EstimateKind.FINAL;
+    }
+
+    private boolean isTargetOutput(ProcessNode node, ItemStack output) {
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        MaterialKey key = materialKeyOf(output);
+        return key != null && (analysis.allTargetOutputs.contains(key)
+            || analysis.targetOutputsByNode.getOrDefault(node.id, java.util.Collections.emptySet())
+                .contains(key));
+    }
+
+    private boolean isCycleMaterial(ItemStack output) {
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        MaterialKey key = materialKeyOf(output);
+        return key != null && analysis.cycleByMaterial.containsKey(key);
+    }
+
+    private GraphAnalysisResult getCachedClientGraphAnalysis() {
+        if (cachedClientGraphAnalysis == null || cachedClientGraphNodeCount != graph.nodes.size()
+            || cachedClientGraphEdgeCount != graph.edges.size()) {
+            cachedClientGraphAnalysis = new ProcessGraphAnalyzer().analyze(graph);
+            cachedClientGraphNodeCount = graph.nodes.size();
+            cachedClientGraphEdgeCount = graph.edges.size();
+        }
+        return cachedClientGraphAnalysis;
     }
 
     private ProcessNode firstConsumerForOutput(ProcessNode node, ItemStack output, List<ProcessNode> relevantNodes) {
@@ -4817,19 +4870,25 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             collectNodeNonConsumables(requirements, node);
             collectNodeRecipeMap(requirements, node);
         }
-        if (hasAnyCycle(nodes)) {
-            collectStartupMaterials(requirements, nodes);
+        GraphAnalysisResult analysis = new ProcessGraphAnalyzer().analyze(graph);
+        for (CycleInfo cycle : analysis.cycles) {
+            collectStartupMaterials(requirements, nodes, cycle);
         }
         return requirements;
     }
 
-    private void collectStartupMaterials(ProcessRequirements requirements, List<ProcessNode> nodes) {
+    private void collectStartupMaterials(ProcessRequirements requirements, List<ProcessNode> nodes, CycleInfo cycle) {
+        if (cycle == null || cycle.requiredStartupMaterials.isEmpty()) {
+            return;
+        }
         Set<Integer> relevantIds = new HashSet<>();
         for (ProcessNode node : nodes) {
             relevantIds.add(node.id);
         }
         for (ProcessEdge edge : graph.edges) {
             if (!relevantIds.contains(edge.fromNodeId) || !relevantIds.contains(edge.toNodeId)
+                || !cycle.nodeIds.contains(edge.fromNodeId)
+                || !cycle.nodeIds.contains(edge.toNodeId)
                 || !hasDirectedPath(edge.toNodeId, edge.fromNodeId, relevantIds, new HashSet<>())) {
                 continue;
             }
@@ -4838,7 +4897,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             if (producer == null || consumer == null) {
                 continue;
             }
-            collectStartupMaterialsForEdge(requirements, producer, consumer);
+            collectStartupMaterialsForEdge(requirements, producer, consumer, cycle.requiredStartupMaterials);
         }
     }
 
@@ -4859,7 +4918,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void collectStartupMaterialsForEdge(ProcessRequirements requirements, ProcessNode producer,
-        ProcessNode consumer) {
+        ProcessNode consumer, List<MaterialKey> startupMaterials) {
         for (int outputSlot = 0; outputSlot < producer.outputHandler.getSlots(); outputSlot++) {
             ItemStack output = producer.outputHandler.getStackInSlot(outputSlot);
             if (output == null) {
@@ -4868,12 +4927,24 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             for (int inputSlot = 0; inputSlot < consumer.inputHandler.getSlots(); inputSlot++) {
                 ItemStack input = consumer.inputHandler.getStackInSlot(inputSlot);
                 if (input != null && inputAcceptsOutput(input, output)) {
+                    MaterialKey inputKey = materialKeyOf(input);
+                    if (inputKey == null || !startupMaterials.contains(inputKey)) {
+                        continue;
+                    }
                     long reserveMin = saturatingMultiply(getEditableAmount(input), Math.max(1, consumer.parallelLimit));
                     long reserveTarget = safeCeilMultiply(reserveMin, 3L, 2L);
                     addStartupMaterial(requirements, input, safeAddLong(reserveTarget, reserveMin));
                 }
             }
         }
+    }
+
+    private MaterialKey materialKeyOf(ItemStack stack) {
+        if (stack == null) {
+            return null;
+        }
+        FluidStack fluid = GTUtility.getFluidFromDisplayStack(stack);
+        return fluid == null ? MaterialKey.ofItem(stack) : MaterialKey.ofFluid(fluid);
     }
 
     private boolean inputAcceptsOutput(ItemStack input, ItemStack output) {
@@ -5093,7 +5164,6 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         node.locked = false;
         node.lastRecipeCheckPassed = false;
         node.estimatedOutputLine = "";
-        node.endNode = false;
         graph.edges.removeIf(edge -> edge.fromNodeId == node.id || edge.toNodeId == node.id);
     }
 
@@ -5504,6 +5574,9 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void syncGraph() {
+        cachedClientGraphAnalysis = null;
+        cachedClientGraphNodeCount = -1;
+        cachedClientGraphEdgeCount = -1;
         if (factory.getBaseMetaTileEntity() != null) {
             NBTTagCompound graphTag = graph.writeToNBT();
             NetworkLoader.INSTANCE

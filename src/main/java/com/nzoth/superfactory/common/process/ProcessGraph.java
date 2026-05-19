@@ -9,7 +9,7 @@ import net.minecraftforge.common.util.Constants;
 
 public final class ProcessGraph {
 
-    public static final int DATA_VERSION = 1;
+    public static final int DATA_VERSION = 2;
 
     public int nextNodeId = 1;
     public int nextEdgeId = 1;

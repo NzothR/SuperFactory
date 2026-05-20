@@ -2533,9 +2533,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         ItemStack[] itemOutputs = effectiveItemOutputs(recipe);
         FluidStack[] fluidOutputs = effectiveFluidOutputs(recipe);
         return recipeMap.unlocalizedName + "|i="
-            + exactGroupedItemKey(recipeConsumableInputs(recipe))
-            + "|r="
-            + System.identityHashCode(recipe)
+            + groupedItemKey(recipeConsumableInputs(recipe))
             + "|fi="
             + groupedFluidKey(effectiveFluidInputs(recipe))
             + "|o="
@@ -2550,18 +2548,6 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             + effectiveDuration(recipe)
             + "|e="
             + effectiveEuPerTick(recipe, effectiveDuration(recipe));
-    }
-
-    private String exactGroupedItemKey(ItemStack[] stacks) {
-        List<String> parts = new ArrayList<>();
-        for (ItemStack stack : safeItems(stacks)) {
-            if (stack == null) {
-                continue;
-            }
-            parts.add(ProcessNode.stackFingerprint(stack) + "@" + Math.max(1L, getDisplayAmount(stack)));
-        }
-        parts.sort(String::compareTo);
-        return parts.toString();
     }
 
     private String groupedItemKey(ItemStack[] stacks) {
@@ -2769,42 +2755,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             return null;
         }
         for (RecipeMatchCandidate candidate : candidates) {
-            if (concreteInputsMatchRecipe(provided, recipeConsumableInputs(candidate.recipe))) {
+            if (inputStacksMatchCandidate(provided, candidate)) {
                 return candidate;
             }
         }
         return null;
-    }
-
-    private boolean concreteInputsMatchRecipe(ItemStack[] provided, ItemStack[] recipeInputs) {
-        List<ItemStack> remaining = new ArrayList<>();
-        for (ItemStack stack : safeItems(recipeInputs)) {
-            if (stack != null) {
-                remaining.add(stack);
-            }
-        }
-        for (ItemStack stack : safeItems(provided)) {
-            if (stack == null) {
-                continue;
-            }
-            int matchedIndex = findConcreteRecipeInputIndex(remaining, stack);
-            if (matchedIndex < 0) {
-                return false;
-            }
-            remaining.remove(matchedIndex);
-        }
-        return remaining.isEmpty();
-    }
-
-    private int findConcreteRecipeInputIndex(List<ItemStack> remaining, ItemStack provided) {
-        for (int i = 0; i < remaining.size(); i++) {
-            ItemStack recipeStack = remaining.get(i);
-            if (recipeStack != null && getDisplayAmount(recipeStack) == getDisplayAmount(provided)
-                && GTUtility.areStacksEqual(recipeStack, provided, true)) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     private boolean hasAnyProvidedHints(ProcessNode node) {
@@ -3456,12 +3411,17 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void mergeCandidateInputVariants(List<List<ItemStack>> variantsBySlot, GTRecipe recipe) {
-        ItemStack[] inputs = recipeConsumableInputs(recipe);
-        for (int i = 0; i < inputs.length; i++) {
+        List<List<ItemStack>> recipeVariants = buildRecipeInputVariantPreview(
+            recipe,
+            java.util.Collections.emptyList(),
+            false);
+        for (int i = 0; i < recipeVariants.size(); i++) {
             while (variantsBySlot.size() <= i) {
                 variantsBySlot.add(new ArrayList<>());
             }
-            addUniqueVariant(variantsBySlot.get(i), inputs[i]);
+            for (ItemStack variant : recipeVariants.get(i)) {
+                addUniqueVariant(variantsBySlot.get(i), variant);
+            }
         }
     }
 

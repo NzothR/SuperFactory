@@ -60,6 +60,7 @@ public final class ProcessNode {
     public final ItemStackHandler nonConsumableHandler = new TrackingItemStackHandler(
         NON_CONSUMABLE_SLOTS,
         this::markRecipeDirty);
+    public final ItemStackHandler cycleMaterialHandler = new ItemStackHandler(1);
 
     public ProcessNode(int id, int x, int y) {
         this.id = id;
@@ -120,6 +121,7 @@ public final class ProcessNode {
         tag.setTag("Inputs", inputHandler.serializeNBT());
         tag.setTag("Outputs", outputHandler.serializeNBT());
         tag.setTag("NonConsumables", nonConsumableHandler.serializeNBT());
+        tag.setTag("CycleMaterial", cycleMaterialHandler.serializeNBT());
         return tag;
     }
 
@@ -183,6 +185,9 @@ public final class ProcessNode {
         }
         if (tag.hasKey("NonConsumables")) {
             node.nonConsumableHandler.deserializeNBT(tag.getCompoundTag("NonConsumables"));
+        }
+        if (tag.hasKey("CycleMaterial")) {
+            node.cycleMaterialHandler.deserializeNBT(tag.getCompoundTag("CycleMaterial"));
         }
         return node;
     }

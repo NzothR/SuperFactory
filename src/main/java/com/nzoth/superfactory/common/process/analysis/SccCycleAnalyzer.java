@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import net.minecraft.item.ItemStack;
+
 import com.nzoth.superfactory.common.process.ProcessEdge;
 import com.nzoth.superfactory.common.process.ProcessGraph;
 import com.nzoth.superfactory.common.process.ProcessNode;
@@ -86,16 +88,17 @@ final class SccCycleAnalyzer {
         }
         List<CycleMaterialInfo> infos = new ArrayList<>();
         for (MaterialKey material : candidateMaterials) {
-            double produced = 0.0D;
-            double consumed = 0.0D;
-            for (Integer nodeId : component) {
-                ProcessNode node = nodesById.get(nodeId);
-                produced += ProcessGraphAnalyzer.producedRate(node, material);
-                consumed += ProcessGraphAnalyzer.consumedRate(node, material);
-            }
-            infos.add(new CycleMaterialInfo(material, produced, consumed));
+            infos.add(cycleMaterialInfo(component, nodesById, material));
         }
-        infos = selectCycleMaterials(component, infos, targetOutputsByNode, relationIndex, componentSet, outputsByNode);
+        infos = selectCycleMaterials(
+            component,
+            infos,
+            nodesById,
+            targetOutputsByNode,
+            relationIndex,
+            componentSet,
+            outputsByNode,
+            inputsByNode);
         Set<MaterialKey> startupCandidateMaterials = new LinkedHashSet<>();
         for (CycleMaterialInfo info : infos) {
             startupCandidateMaterials.add(info.material);
@@ -111,24 +114,245 @@ final class SccCycleAnalyzer {
         if (!cycle.validSingleMaterialCycle) {
             validation.error(
                 "CYCLE_MULTI_MATERIAL",
-                "环 " + cycleId + " 循环物料数量不是 1: nodes=" + component + ", materials=" + candidateMaterials);
+                "环 " + cycleId
+                    + " 循环物料数量不是 1: nodes="
+                    + describeNodes(component, nodesById)
+                    + ", materials="
+                    + describeCycleInfoMaterials(component, nodesById, infos));
         } else if (!cycle.positiveNetOutput) {
             validation.error(
                 "CYCLE_NON_POSITIVE_NET",
-                "环 " + cycleId + " 循环物料没有正净输出: material=" + cycle.cycleMaterial + ", net=" + cycle.netRate);
+                "环 " + cycleId
+                    + " 循环物料没有正净输出: material="
+                    + describeMaterial(component, nodesById, cycle.cycleMaterial)
+                    + ", net="
+                    + cycle.netRate);
         }
+        validateTargetCycle(
+            cycle,
+            component,
+            nodesById,
+            outputsByNode,
+            inputsByNode,
+            targetOutputsByNode,
+            relationIndex,
+            validation);
         if (!cycle.hasStartupPath && cycle.requiredStartupMaterials.isEmpty()) {
             validation.warning("CYCLE_STARTUP_UNKNOWN", "环 " + cycleId + " 未能推断启动路径。");
         }
         return cycle;
     }
 
+    private static void validateTargetCycle(CycleInfo cycle, List<Integer> component,
+        Map<Integer, ProcessNode> nodesById, Map<Integer, Set<MaterialKey>> outputsByNode,
+        Map<Integer, Set<MaterialKey>> inputsByNode, Map<Integer, Set<MaterialKey>> targetOutputsByNode,
+        NodeRelationIndex relationIndex, GraphValidationResult validation) {
+        List<Integer> targetNodeIds = new ArrayList<>();
+        for (Integer nodeId : component) {
+            ProcessNode node = nodesById.get(nodeId);
+            if (node != null && node.endNode) {
+                targetNodeIds.add(nodeId);
+            }
+        }
+        if (targetNodeIds.isEmpty()) {
+            return;
+        }
+        if (targetNodeIds.size() != 1) {
+            validation.error(
+                "TARGET_CYCLE_MULTIPLE_TARGETS",
+                "目标环 " + cycle.cycleId + " 只能包含一个目标节点: nodes=" + describeNodes(targetNodeIds, nodesById));
+            return;
+        }
+        if (!cycle.validSingleMaterialCycle || cycle.cycleMaterial == null) {
+            return;
+        }
+        Integer targetNodeId = targetNodeIds.get(0);
+        ProcessNode targetNode = nodesById.get(targetNodeId);
+        Set<Integer> componentSet = new HashSet<>(component);
+        if (!targetHasInternalExport(
+            targetNodeId,
+            cycle.cycleMaterial,
+            nodesById,
+            relationIndex,
+            componentSet,
+            outputsByNode,
+            inputsByNode)) {
+            validation.error(
+                "TARGET_CYCLE_TARGET_NOT_INTERNAL_OUTPUT",
+                "目标环 " + cycle.cycleId
+                    + " 的目标节点必须把循环物料输出给环内节点: node="
+                    + describeNode(targetNode)
+                    + ", material="
+                    + describeMaterial(component, nodesById, cycle.cycleMaterial));
+        }
+        double producedRate = ProcessGraphAnalyzer.producedRate(targetNode, cycle.cycleMaterial);
+        double consumedRate = ProcessGraphAnalyzer.consumedRate(targetNode, cycle.cycleMaterial);
+        if (producedRate <= consumedRate) {
+            validation.error(
+                "TARGET_CYCLE_TARGET_NON_POSITIVE_NET",
+                "目标环 " + cycle.cycleId
+                    + " 的目标节点必须正净产出循环物料: node="
+                    + describeNode(targetNode)
+                    + ", material="
+                    + describeMaterial(component, nodesById, cycle.cycleMaterial)
+                    + ", producedRate="
+                    + producedRate
+                    + ", consumedRate="
+                    + consumedRate);
+        }
+        if (targetCycleMaterialHasExternalConsumer(
+            component,
+            nodesById,
+            outputsByNode,
+            inputsByNode,
+            relationIndex,
+            cycle.cycleMaterial)) {
+            validation.error(
+                "TARGET_CYCLE_EXTERNAL_CONSUMER",
+                "目标环 " + cycle.cycleId
+                    + " 的循环物料不能被环外节点消耗: material="
+                    + describeMaterial(component, nodesById, cycle.cycleMaterial));
+        }
+    }
+
+    private static String describeNode(ProcessNode node) {
+        if (node == null) {
+            return "?";
+        }
+        String name = node.name == null || node.name.trim()
+            .isEmpty() ? "节点" + node.id : node.name.trim();
+        return name + "#" + node.id;
+    }
+
+    private static String describeNodes(List<Integer> nodeIds, Map<Integer, ProcessNode> nodesById) {
+        List<String> names = new ArrayList<>();
+        for (Integer nodeId : nodeIds) {
+            names.add(describeNode(nodesById.get(nodeId)));
+        }
+        return names.toString();
+    }
+
+    private static String describeMaterials(List<Integer> component, Map<Integer, ProcessNode> nodesById,
+        Iterable<MaterialKey> materials) {
+        List<String> names = new ArrayList<>();
+        for (MaterialKey material : materials) {
+            names.add(describeMaterial(component, nodesById, material));
+        }
+        return names.toString();
+    }
+
+    private static String describeCycleInfoMaterials(List<Integer> component, Map<Integer, ProcessNode> nodesById,
+        List<CycleMaterialInfo> infos) {
+        List<MaterialKey> materials = new ArrayList<>();
+        for (CycleMaterialInfo info : infos) {
+            materials.add(info.material);
+        }
+        return describeMaterials(component, nodesById, materials);
+    }
+
+    private static String describeMaterial(List<Integer> component, Map<Integer, ProcessNode> nodesById,
+        MaterialKey material) {
+        String displayName = findMaterialDisplayName(component, nodesById, material);
+        return displayName == null ? String.valueOf(material) : displayName + " (" + material + ")";
+    }
+
+    private static String findMaterialDisplayName(List<Integer> component, Map<Integer, ProcessNode> nodesById,
+        MaterialKey material) {
+        if (material == null) {
+            return null;
+        }
+        for (Integer nodeId : component) {
+            ProcessNode node = nodesById.get(nodeId);
+            String name = findMaterialDisplayName(node, material, true);
+            if (name != null) {
+                return name;
+            }
+            name = findMaterialDisplayName(node, material, false);
+            if (name != null) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    private static String findMaterialDisplayName(ProcessNode node, MaterialKey material, boolean outputs) {
+        if (node == null) {
+            return null;
+        }
+        int slots = outputs ? node.outputHandler.getSlots() : node.inputHandler.getSlots();
+        for (int slot = 0; slot < slots; slot++) {
+            ItemStack stack = outputs ? node.outputHandler.getStackInSlot(slot)
+                : node.inputHandler.getStackInSlot(slot);
+            if (stack != null && material.equals(ProcessGraphAnalyzer.keyOf(stack))) {
+                return stack.getDisplayName();
+            }
+        }
+        return null;
+    }
+
+    private static boolean targetCycleMaterialHasExternalConsumer(List<Integer> component,
+        Map<Integer, ProcessNode> nodesById, Map<Integer, Set<MaterialKey>> outputsByNode,
+        Map<Integer, Set<MaterialKey>> inputsByNode, NodeRelationIndex relationIndex, MaterialKey material) {
+        Set<Integer> componentSet = new HashSet<>(component);
+        for (Integer nodeId : component) {
+            if (!outputsByNode.getOrDefault(nodeId, Collections.emptySet())
+                .contains(material)) {
+                continue;
+            }
+            ProcessNode from = nodesById.get(nodeId);
+            for (ProcessEdge edge : relationIndex.outgoingEdgesByNode.getOrDefault(nodeId, Collections.emptyList())) {
+                if (componentSet.contains(edge.toNodeId)) {
+                    continue;
+                }
+                ProcessNode to = nodesById.get(edge.toNodeId);
+                if (ProcessGraphAnalyzer.edgeCarriesMaterial(
+                    edge,
+                    from,
+                    to,
+                    material,
+                    outputsByNode.getOrDefault(edge.fromNodeId, Collections.emptySet()),
+                    inputsByNode.getOrDefault(edge.toNodeId, Collections.emptySet()))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static List<CycleMaterialInfo> selectCycleMaterials(List<Integer> component, List<CycleMaterialInfo> infos,
-        Map<Integer, Set<MaterialKey>> targetOutputsByNode, NodeRelationIndex relationIndex, Set<Integer> componentSet,
-        Map<Integer, Set<MaterialKey>> outputsByNode) {
+        Map<Integer, ProcessNode> nodesById, Map<Integer, Set<MaterialKey>> targetOutputsByNode,
+        NodeRelationIndex relationIndex, Set<Integer> componentSet, Map<Integer, Set<MaterialKey>> outputsByNode,
+        Map<Integer, Set<MaterialKey>> inputsByNode) {
+        List<CycleMaterialInfo> manualInfos = manuallySpecifiedCycleMaterials(component, infos, nodesById);
+        if (!manualInfos.isEmpty()) {
+            return manualInfos;
+        }
         Set<MaterialKey> targetOutputs = new LinkedHashSet<>();
         for (Integer nodeId : component) {
             targetOutputs.addAll(targetOutputsByNode.getOrDefault(nodeId, Collections.emptySet()));
+        }
+        if (!targetOutputs.isEmpty()) {
+            List<CycleMaterialInfo> selected = new ArrayList<>();
+            for (CycleMaterialInfo info : infos) {
+                if (targetOutputs.contains(info.material)) {
+                    selected.add(info);
+                }
+            }
+            if (!selected.isEmpty()) {
+                return selected;
+            }
+        }
+        List<CycleMaterialInfo> targetInternalOutputs = targetInternalPositiveNetOutputs(
+            component,
+            infos,
+            nodesById,
+            targetOutputsByNode,
+            relationIndex,
+            componentSet,
+            outputsByNode,
+            inputsByNode);
+        if (!targetInternalOutputs.isEmpty()) {
+            return targetInternalOutputs;
         }
         if (targetOutputs.isEmpty()) {
             List<CycleMaterialInfo> exportedPositiveNetMaterials = new ArrayList<>();
@@ -149,13 +373,110 @@ final class SccCycleAnalyzer {
             }
             return positiveNetMaterials.isEmpty() ? infos : positiveNetMaterials;
         }
+        return infos;
+    }
+
+    private static CycleMaterialInfo cycleMaterialInfo(List<Integer> component, Map<Integer, ProcessNode> nodesById,
+        MaterialKey material) {
+        double produced = 0.0D;
+        double consumed = 0.0D;
+        for (Integer nodeId : component) {
+            ProcessNode node = nodesById.get(nodeId);
+            produced += ProcessGraphAnalyzer.producedRate(node, material);
+            consumed += ProcessGraphAnalyzer.consumedRate(node, material);
+        }
+        return new CycleMaterialInfo(material, produced, consumed);
+    }
+
+    private static List<CycleMaterialInfo> manuallySpecifiedCycleMaterials(List<Integer> component,
+        List<CycleMaterialInfo> infos, Map<Integer, ProcessNode> nodesById) {
+        Set<MaterialKey> manualMaterials = new LinkedHashSet<>();
+        for (Integer nodeId : component) {
+            ProcessNode node = nodesById.get(nodeId);
+            if (node == null) {
+                continue;
+            }
+            MaterialKey material = ProcessGraphAnalyzer.keyOf(node.cycleMaterialHandler.getStackInSlot(0));
+            if (material != null) {
+                manualMaterials.add(material);
+            }
+        }
+        if (manualMaterials.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<CycleMaterialInfo> selected = new ArrayList<>();
+        for (MaterialKey material : manualMaterials) {
+            CycleMaterialInfo existing = findCycleMaterialInfo(infos, material);
+            selected.add(existing == null ? cycleMaterialInfo(component, nodesById, material) : existing);
+        }
+        return selected;
+    }
+
+    private static CycleMaterialInfo findCycleMaterialInfo(List<CycleMaterialInfo> infos, MaterialKey material) {
+        for (CycleMaterialInfo info : infos) {
+            if (info.material.equals(material)) {
+                return info;
+            }
+        }
+        return null;
+    }
+
+    private static List<CycleMaterialInfo> targetInternalPositiveNetOutputs(List<Integer> component,
+        List<CycleMaterialInfo> infos, Map<Integer, ProcessNode> nodesById,
+        Map<Integer, Set<MaterialKey>> targetOutputsByNode, NodeRelationIndex relationIndex, Set<Integer> componentSet,
+        Map<Integer, Set<MaterialKey>> outputsByNode, Map<Integer, Set<MaterialKey>> inputsByNode) {
+        List<Integer> targetNodeIds = new ArrayList<>();
+        for (Integer nodeId : component) {
+            ProcessNode node = nodesById.get(nodeId);
+            if (node != null && node.endNode) {
+                targetNodeIds.add(nodeId);
+            }
+        }
+        if (targetNodeIds.size() != 1) {
+            return Collections.emptyList();
+        }
+        int targetNodeId = targetNodeIds.get(0);
+        ProcessNode target = nodesById.get(targetNodeId);
         List<CycleMaterialInfo> selected = new ArrayList<>();
         for (CycleMaterialInfo info : infos) {
-            if (targetOutputs.contains(info.material)) {
+            if (ProcessGraphAnalyzer.producedRate(target, info.material)
+                <= ProcessGraphAnalyzer.consumedRate(target, info.material)) {
+                continue;
+            }
+            if (targetHasInternalExport(
+                targetNodeId,
+                info.material,
+                nodesById,
+                relationIndex,
+                componentSet,
+                outputsByNode,
+                inputsByNode)) {
                 selected.add(info);
             }
         }
-        return selected.isEmpty() ? infos : selected;
+        return selected;
+    }
+
+    private static boolean targetHasInternalExport(int targetNodeId, MaterialKey material,
+        Map<Integer, ProcessNode> nodesById, NodeRelationIndex relationIndex, Set<Integer> componentSet,
+        Map<Integer, Set<MaterialKey>> outputsByNode, Map<Integer, Set<MaterialKey>> inputsByNode) {
+        ProcessNode target = nodesById.get(targetNodeId);
+        for (ProcessEdge edge : relationIndex.outgoingEdgesByNode.getOrDefault(targetNodeId, Collections.emptyList())) {
+            if (!componentSet.contains(edge.toNodeId)) {
+                continue;
+            }
+            ProcessNode to = nodesById.get(edge.toNodeId);
+            if (ProcessGraphAnalyzer.edgeCarriesMaterial(
+                edge,
+                target,
+                to,
+                material,
+                outputsByNode.getOrDefault(edge.fromNodeId, Collections.emptySet()),
+                inputsByNode.getOrDefault(edge.toNodeId, Collections.emptySet()))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean hasExternalExport(MaterialKey material, Set<Integer> componentSet,

@@ -3,6 +3,7 @@ package com.nzoth.superfactory.client.ui;
 import java.io.File;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -28,6 +29,7 @@ import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
 
 import com.gtnewhorizons.modularui.api.forge.ItemStackHandler;
+import com.nzoth.superfactory.SuperFactory;
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
 import com.nzoth.superfactory.common.network.MessageExportProcessRawMaterials;
 import com.nzoth.superfactory.common.network.MessageRestoreSubmittedProcessGraph;
@@ -40,6 +42,7 @@ import com.nzoth.superfactory.common.process.ProcessNode;
 import com.nzoth.superfactory.common.process.ProcessRequirements;
 import com.nzoth.superfactory.common.process.analysis.CycleInfo;
 import com.nzoth.superfactory.common.process.analysis.GraphAnalysisResult;
+import com.nzoth.superfactory.common.process.analysis.GraphValidationError;
 import com.nzoth.superfactory.common.process.analysis.ProcessGraphAnalyzer;
 import com.nzoth.superfactory.common.process.key.MaterialKey;
 
@@ -183,12 +186,20 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             toolbarTop + 72,
             24,
             20,
+            "T",
+            tr("superfactory.machine.super_integrated_factory.process.target_balance"),
+            this::targetBalanceProcess);
+        addCanvasButton(
+            toolbarLeft,
+            toolbarTop + 96,
+            24,
+            20,
             "1",
             tr("superfactory.machine.super_integrated_factory.process.reset_parallel"),
             this::confirmResetParallel);
         addCanvasButton(
             toolbarLeft,
-            toolbarTop + 96,
+            toolbarTop + 120,
             24,
             20,
             "I",
@@ -196,7 +207,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             this::confirmResetNodeState);
         addCanvasButton(
             toolbarLeft,
-            toolbarTop + 120,
+            toolbarTop + 144,
             24,
             20,
             "原",
@@ -204,7 +215,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             this::exportRawMaterials);
         addCanvasButton(
             toolbarLeft,
-            toolbarTop + 144,
+            toolbarTop + 168,
             24,
             20,
             "S",
@@ -212,7 +223,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             this::submitProcess);
         addCanvasButton(
             toolbarLeft,
-            toolbarTop + 168,
+            toolbarTop + 192,
             24,
             20,
             "还",
@@ -220,7 +231,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             this::confirmRestoreSubmittedGraph);
         addCanvasButton(
             toolbarLeft,
-            toolbarTop + 192,
+            toolbarTop + 216,
             24,
             20,
             "X",
@@ -744,6 +755,17 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             editingNode.nonConsumableHandler,
             9,
             9,
+            mouseX,
+            mouseY,
+            false,
+            false);
+        drawPatternPreview(
+            rightX,
+            y + 190,
+            tr("superfactory.machine.super_integrated_factory.node_editor.cycle_material"),
+            editingNode.cycleMaterialHandler,
+            1,
+            1,
             mouseX,
             mouseY,
             false,
@@ -1346,11 +1368,14 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     public boolean acceptDraggedStack(int mouseX, int mouseY, ItemStack draggedStack) {
-        if (!editorOpen || editingNode == null || editingNode.locked || draggedStack == null) {
+        if (!editorOpen || editingNode == null || draggedStack == null) {
             return false;
         }
         SlotHit hit = findPatternSlot(mouseX, mouseY);
         if (hit == null) {
+            return false;
+        }
+        if (editingNode.locked && hit.handler != editingNode.cycleMaterialHandler) {
             return false;
         }
         ItemStack placed = draggedStack.copy();
@@ -1361,7 +1386,10 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (hit.handler == editingNode.nonConsumableHandler && GTUtility.getFluidFromDisplayStack(placed) != null) {
             return false;
         }
-        if (containsEquivalentStack(hit.handler, placed)) {
+        if (hit.handler == editingNode.cycleMaterialHandler) {
+            placed = withDisplayAmount(placed, 1L);
+        }
+        if (hit.handler != editingNode.cycleMaterialHandler && containsEquivalentStack(hit.handler, placed)) {
             return false;
         }
         hit.handler.setStackInSlot(hit.slot, placed);
@@ -1370,7 +1398,9 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         } else if (hit.handler == editingNode.outputHandler) {
             editingNode.setOutputChance(hit.slot, 10000);
         }
-        invalidateNodeCheck();
+        if (hit.handler != editingNode.cycleMaterialHandler) {
+            invalidateNodeCheck();
+        }
         applyEditorFields();
         syncGraph();
         return true;
@@ -1495,7 +1525,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             openOreVariantSelector(hit.slot);
             return true;
         }
-        if (editingNode.locked) {
+        if (editingNode.locked && hit.handler != editingNode.cycleMaterialHandler) {
             return true;
         }
         if (mouseButton == 1) {
@@ -1505,9 +1535,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             } else if (hit.handler == editingNode.outputHandler) {
                 editingNode.setOutputChance(hit.slot, 10000);
             }
-            invalidateNodeCheck();
+            if (hit.handler != editingNode.cycleMaterialHandler) {
+                invalidateNodeCheck();
+            }
             syncGraph();
-        } else if (mouseButton == 2) {
+        } else if (mouseButton == 2 && hit.handler != editingNode.cycleMaterialHandler) {
             openAmountEditor(hit.handler, hit.slot);
         }
         return true;
@@ -1555,7 +1587,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (hit != null) {
             return hit;
         }
-        return findPatternSlot(mouseX, mouseY, rightX, y + 150, editingNode.nonConsumableHandler, 9, 9, 0);
+        hit = findPatternSlot(mouseX, mouseY, rightX, y + 150, editingNode.nonConsumableHandler, 9, 9, 0);
+        if (hit != null) {
+            return hit;
+        }
+        return findPatternSlot(mouseX, mouseY, rightX, y + 190, editingNode.cycleMaterialHandler, 1, 1, 0);
     }
 
     private SlotHit findPatternSlot(int mouseX, int mouseY, int x, int y, ItemStackHandler handler, int columns,
@@ -2336,8 +2372,19 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 exactCandidates.add(candidate);
             }
         }
+        logRecipeCheckSummary(editingNode, candidates, exactCandidates, fillOutputs, false);
         if (exactCandidates.size() == 1) {
             applyRecipeCandidateForCheck(exactCandidates.get(0), fillOutputs);
+            return;
+        }
+        RecipeMatchCandidate equivalentExactCandidate = selectEquivalentExactCandidate(editingNode, exactCandidates);
+        if (equivalentExactCandidate != null) {
+            applyRecipeCandidateForCheck(equivalentExactCandidate, fillOutputs);
+            return;
+        }
+        RecipeMatchCandidate equivalentLooseCandidate = selectEquivalentLooseCandidate(editingNode, candidates);
+        if (equivalentLooseCandidate != null) {
+            applyRecipeCandidateForCheck(equivalentLooseCandidate, fillOutputs);
             return;
         }
         if (candidates.size() == 1) {
@@ -2346,9 +2393,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         }
         if (candidates.isEmpty()) {
             candidates = findRecipeCandidates(editingNode, true);
+            logRecipeCheckSummary(editingNode, candidates, java.util.Collections.emptyList(), fillOutputs, true);
         }
         editingNode.lastRecipeCheckPassed = false;
         if (candidates.size() > 1) {
+            logRecipeCandidateSelectorOpen(editingNode, candidates);
             recipeCandidates = candidates;
             candidateSelectorFillOutputs = true;
             candidateSelectorOpen = true;
@@ -2370,9 +2419,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             showError(tr("superfactory.machine.super_integrated_factory.process.error.no_recipe_outputs"));
             return false;
         }
-        boolean shouldFillOutputs = fillOutputs
-            || !hasProvidedOutputs(editingNode) && !hasProvidedOutputFluids(editingNode);
-        applyRecipeCandidate(candidate, shouldFillOutputs);
+        if (fillOutputs) {
+            applyRecipeCandidate(candidate, true);
+        } else {
+            applyRecipeCandidateForCheckOnly(candidate);
+        }
         return true;
     }
 
@@ -2528,9 +2579,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         ItemStack[] itemOutputs = effectiveItemOutputs(recipe);
         FluidStack[] fluidOutputs = effectiveFluidOutputs(recipe);
         return recipeMap.unlocalizedName + "|i="
-            + exactGroupedItemKey(recipeConsumableInputs(recipe))
-            + "|r="
-            + System.identityHashCode(recipe)
+            + groupedItemKey(recipeConsumableInputs(recipe))
             + "|fi="
             + groupedFluidKey(effectiveFluidInputs(recipe))
             + "|o="
@@ -2545,18 +2594,6 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             + effectiveDuration(recipe)
             + "|e="
             + effectiveEuPerTick(recipe, effectiveDuration(recipe));
-    }
-
-    private String exactGroupedItemKey(ItemStack[] stacks) {
-        List<String> parts = new ArrayList<>();
-        for (ItemStack stack : safeItems(stacks)) {
-            if (stack == null) {
-                continue;
-            }
-            parts.add(ProcessNode.stackFingerprint(stack) + "@" + Math.max(1L, getDisplayAmount(stack)));
-        }
-        parts.sort(String::compareTo);
-        return parts.toString();
     }
 
     private String groupedItemKey(ItemStack[] stacks) {
@@ -2721,6 +2758,207 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                     true));
     }
 
+    private RecipeMatchCandidate selectEquivalentExactCandidate(ProcessNode node,
+        List<RecipeMatchCandidate> exactCandidates) {
+        if (node == null || exactCandidates == null || exactCandidates.size() <= 1) {
+            return null;
+        }
+        String signature = recipeEquivalenceSignature(exactCandidates.get(0));
+        for (RecipeMatchCandidate candidate : exactCandidates) {
+            String candidateSignature = recipeEquivalenceSignature(candidate);
+            if (!signature.equals(candidateSignature)) {
+                logRecipeEquivalentCandidateRejected(node, signature, candidateSignature, exactCandidates);
+                return null;
+            }
+        }
+        RecipeMatchCandidate concreteMatch = selectConcreteInputMatch(node, exactCandidates);
+        return concreteMatch == null ? exactCandidates.get(0) : concreteMatch;
+    }
+
+    private RecipeMatchCandidate selectEquivalentLooseCandidate(ProcessNode node,
+        List<RecipeMatchCandidate> candidates) {
+        if (node == null || candidates == null || candidates.size() <= 1) {
+            return null;
+        }
+        String signature = recipeEquivalenceSignature(candidates.get(0));
+        for (RecipeMatchCandidate candidate : candidates) {
+            String candidateSignature = recipeEquivalenceSignature(candidate);
+            if (!signature.equals(candidateSignature)) {
+                return null;
+            }
+        }
+        RecipeMatchCandidate looseConcreteMatch = selectLooseConcreteInputMatch(node, candidates);
+        return looseConcreteMatch == null ? candidates.get(0) : looseConcreteMatch;
+    }
+
+    private String recipeEquivalenceSignature(RecipeMatchCandidate candidate) {
+        if (candidate == null) {
+            return "";
+        }
+        return candidate.recipeMap.unlocalizedName + "|fi="
+            + groupedFluidKey(candidate.fluidInputs)
+            + "|o="
+            + groupedItemKey(candidate.itemOutputs)
+            + "|oc="
+            + groupedOutputChanceKey(candidate.itemOutputs, candidate.outputChances)
+            + "|fo="
+            + groupedFluidKey(candidate.fluidOutputs)
+            + "|nc="
+            + groupedItemKey(recipeNonConsumableStacks(candidate.recipe).toArray(new ItemStack[0]))
+            + "|t="
+            + candidate.durationTicks
+            + "|e="
+            + candidate.euPerTick;
+    }
+
+    private void logRecipeCheckSummary(ProcessNode node, List<RecipeMatchCandidate> candidates,
+        List<RecipeMatchCandidate> exactCandidates, boolean fillOutputs, boolean fallback) {
+        SuperFactory.LOG.info(
+            "[Super Integrated Factory/RecipeCheck] node='{}', fillOutputs={}, fallbackIgnoreHints={}, inputs={}, inputFluids={}, outputs={}, outputFluids={}, nonConsumables={}, candidates={}, exactCandidates={}",
+            safeNodeName(node),
+            fillOutputs,
+            fallback,
+            debugItemStacks(gatherInputItemStacks(node)),
+            debugFluidStacks(gatherFluidStacks(node.inputHandler)),
+            debugItemStacks(gatherItemStacks(node.outputHandler)),
+            debugFluidStacks(gatherFluidStacks(node.outputHandler)),
+            debugItemStacks(gatherItemStacks(node.nonConsumableHandler)),
+            candidates == null ? 0 : candidates.size(),
+            exactCandidates == null ? 0 : exactCandidates.size());
+        logRecipeCandidatesForDebug("candidate", candidates);
+        logRecipeCandidatesForDebug("exact", exactCandidates);
+    }
+
+    private void logRecipeCandidateSelectorOpen(ProcessNode node, List<RecipeMatchCandidate> candidates) {
+        SuperFactory.LOG.info(
+            "[Super Integrated Factory/RecipeCheck] opening candidate selector for node='{}', candidates={}",
+            safeNodeName(node),
+            candidates == null ? 0 : candidates.size());
+        logRecipeCandidatesForDebug("selector", candidates);
+    }
+
+    private void logRecipeEquivalentCandidateRejected(ProcessNode node, String expectedSignature,
+        String actualSignature, List<RecipeMatchCandidate> exactCandidates) {
+        SuperFactory.LOG.info(
+            "[Super Integrated Factory/RecipeCheck] equivalent exact candidates rejected for node='{}': expectedSignature={}, actualSignature={}",
+            safeNodeName(node),
+            expectedSignature,
+            actualSignature);
+        logRecipeCandidatesForDebug("rejectedExact", exactCandidates);
+    }
+
+    private void logRecipeCandidatesForDebug(String label, List<RecipeMatchCandidate> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < candidates.size(); i++) {
+            SuperFactory.LOG.info(
+                "[Super Integrated Factory/RecipeCheck] {}[{}] {}",
+                label,
+                i,
+                debugRecipeCandidate(candidates.get(i)));
+        }
+    }
+
+    private String debugRecipeCandidate(RecipeMatchCandidate candidate) {
+        if (candidate == null) {
+            return "<null>";
+        }
+        return "map=" + candidate.recipeMap.unlocalizedName
+            + ", ratioMatches="
+            + candidate.ratioMatches
+            + ", input="
+            + debugItemStacks(recipeConsumableInputs(candidate.recipe))
+            + ", variants="
+            + debugInputVariants(candidate.inputVariants)
+            + ", inputFluids="
+            + debugFluidStacks(candidate.fluidInputs)
+            + ", outputs="
+            + debugItemStacks(candidate.itemOutputs)
+            + ", outputFluids="
+            + debugFluidStacks(candidate.fluidOutputs)
+            + ", nc="
+            + debugItemStacks(recipeNonConsumableStacks(candidate.recipe).toArray(new ItemStack[0]))
+            + ", duration="
+            + candidate.durationTicks
+            + ", eu="
+            + candidate.euPerTick
+            + ", signature="
+            + recipeEquivalenceSignature(candidate);
+    }
+
+    private String debugInputVariants(List<List<ItemStack>> inputVariants) {
+        if (inputVariants == null || inputVariants.isEmpty()) {
+            return "[]";
+        }
+        List<String> parts = new ArrayList<>();
+        for (int i = 0; i < inputVariants.size(); i++) {
+            parts.add(
+                i + ":"
+                    + debugItemStacks(
+                        inputVariants.get(i)
+                            .toArray(new ItemStack[0])));
+        }
+        return parts.toString();
+    }
+
+    private String debugItemStacks(ItemStack[] stacks) {
+        List<String> parts = new ArrayList<>();
+        for (ItemStack stack : safeItems(stacks)) {
+            if (stack != null) {
+                parts.add(debugItemStack(stack));
+            }
+        }
+        return parts.toString();
+    }
+
+    private String debugFluidStacks(FluidStack[] fluids) {
+        List<String> parts = new ArrayList<>();
+        for (FluidStack fluid : safeFluids(fluids)) {
+            if (fluid != null && fluid.getFluid() != null) {
+                parts.add(
+                    fluid.getFluid()
+                        .getName() + "@"
+                        + Math.max(1, fluid.amount));
+            }
+        }
+        return parts.toString();
+    }
+
+    private String debugItemStack(ItemStack stack) {
+        if (stack == null) {
+            return "<null>";
+        }
+        return stack.getDisplayName() + "@" + Math.max(1L, getDisplayAmount(stack)) + "{" + itemGroupKey(stack) + "}";
+    }
+
+    private RecipeMatchCandidate selectConcreteInputMatch(ProcessNode node, List<RecipeMatchCandidate> candidates) {
+        ItemStack[] provided = gatherInputItemStacks(node);
+        if (provided.length == 0) {
+            return null;
+        }
+        for (RecipeMatchCandidate candidate : candidates) {
+            if (inputStacksMatchCandidate(provided, candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private RecipeMatchCandidate selectLooseConcreteInputMatch(ProcessNode node,
+        List<RecipeMatchCandidate> candidates) {
+        ItemStack[] provided = gatherInputItemStacks(node);
+        if (provided.length == 0) {
+            return null;
+        }
+        for (RecipeMatchCandidate candidate : candidates) {
+            if (inputStacksMatchCandidate(provided, candidate, false)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
     private boolean hasAnyProvidedHints(ProcessNode node) {
         return hasProvidedInputs(node) || hasProvidedInputFluids(node)
             || hasProvidedOutputs(node)
@@ -2783,6 +3021,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private boolean inputStacksMatchCandidate(ItemStack[] provided, RecipeMatchCandidate candidate) {
+        return inputStacksMatchCandidate(provided, candidate, true);
+    }
+
+    private boolean inputStacksMatchCandidate(ItemStack[] provided, RecipeMatchCandidate candidate,
+        boolean exactAmount) {
         List<List<ItemStack>> remaining = new ArrayList<>();
         ItemStack[] recipeInputs = recipeConsumableInputs(candidate.recipe);
         for (int slot = 0; slot < recipeInputs.length; slot++) {
@@ -2804,7 +3047,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 continue;
             }
             providedCount++;
-            int matchedIndex = findMatchingCandidateInputSlot(remaining, stack);
+            int matchedIndex = findMatchingCandidateInputSlot(remaining, stack, exactAmount);
             if (matchedIndex < 0) {
                 return false;
             }
@@ -2813,10 +3056,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return providedCount == recipeInputs.length && remaining.isEmpty();
     }
 
-    private int findMatchingCandidateInputSlot(List<List<ItemStack>> remaining, ItemStack provided) {
+    private int findMatchingCandidateInputSlot(List<List<ItemStack>> remaining, ItemStack provided,
+        boolean exactAmount) {
         for (int i = 0; i < remaining.size(); i++) {
             for (ItemStack variant : remaining.get(i)) {
-                if (variant != null && getDisplayAmount(variant) == getDisplayAmount(provided)
+                if (variant != null && (!exactAmount || getDisplayAmount(variant) == getDisplayAmount(provided))
                     && recipeInputAcceptsProvided(variant, provided)) {
                     return i;
                 }
@@ -2949,7 +3193,35 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         setEditorFieldsEnabled(!editingNode.locked);
     }
 
+    private void applyRecipeCandidateForCheckOnly(RecipeMatchCandidate candidate) {
+        if (editingNode == null) {
+            return;
+        }
+        applyRecipeCandidateState(candidate, true, true);
+        normalizeExistingOutputs(candidate);
+        applyOutputChances(editingNode.outputHandler, candidate, editingNode);
+        if (!recipeNonConsumableStacks(candidate.recipe).isEmpty() || !hasProvidedNonConsumables(editingNode)) {
+            fillHandlerFromNonConsumables(editingNode.nonConsumableHandler, candidate.recipe);
+        }
+        editingNode.recipeMapName = candidate.recipeMap.unlocalizedName;
+        editingNode.recipeHandlerName = StatCollector.translateToLocal(candidate.recipeMap.unlocalizedName);
+        editingNode.fakeRecipeSnapshot = false;
+        editingNode.virtualRecipeSnapshot = null;
+        applyRecipeTiming(candidate);
+        editingNode.recipeFingerprint = editingNode.buildRecipeFingerprint();
+        editingNode.lastRecipeCheckPassed = true;
+        fillEmptyNameFromRecipeOutput();
+        writeEstimatedOutputs(java.util.Collections.singletonList(editingNode));
+        rebuildEditorFields(editingNode);
+        setEditorFieldsEnabled(!editingNode.locked);
+    }
+
     private void applyRecipeCandidateState(RecipeMatchCandidate candidate, boolean fillMissingInputs) {
+        applyRecipeCandidateState(candidate, fillMissingInputs, false);
+    }
+
+    private void applyRecipeCandidateState(RecipeMatchCandidate candidate, boolean fillMissingInputs,
+        boolean preserveProvidedInputs) {
         if (editingNode == null || candidate == null) {
             return;
         }
@@ -2963,12 +3235,19 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             List<ItemStack> variants = editingNode.hasInputVariants(slot) ? editingNode.getInputVariants(slot)
                 : slot < candidate.inputVariants.size() ? candidate.inputVariants.get(slot)
                     : java.util.Collections.emptyList();
+            if (preserveProvidedInputs) {
+                ItemStack currentStack = slot < currentInputs.length ? currentInputs[slot] : null;
+                if (currentInputMatchesRecipeSlot(currentStack, recipeInputs[slot], variants)) {
+                    variants = new ArrayList<>();
+                    addUniqueVariant(variants, withDisplayAmount(currentStack, getEditableAmount(recipeInputs[slot])));
+                }
+            }
             preferredVariantsBySlot.add(variants);
         }
         if (fillMissingInputs || hasProvidedInputs(editingNode) || hasProvidedInputFluids(editingNode)) {
             fillHandlerFromRecipe(
                 editingNode.inputHandler,
-                selectDisplayedInputStacks(recipeInputs, currentInputs, preferredVariantsBySlot)
+                selectDisplayedInputStacks(recipeInputs, currentInputs, preferredVariantsBySlot, preserveProvidedInputs)
                     .toArray(new ItemStack[0]),
                 candidate.fluidInputs);
         }
@@ -3041,12 +3320,21 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
 
     private List<ItemStack> selectDisplayedInputStacks(ItemStack[] recipeInputs, ItemStack[] currentInputs,
         List<List<ItemStack>> preferredVariantsBySlot) {
+        return selectDisplayedInputStacks(recipeInputs, currentInputs, preferredVariantsBySlot, false);
+    }
+
+    private List<ItemStack> selectDisplayedInputStacks(ItemStack[] recipeInputs, ItemStack[] currentInputs,
+        List<List<ItemStack>> preferredVariantsBySlot, boolean preserveProvidedInputs) {
         List<ItemStack> stacks = new ArrayList<>();
         for (int slot = 0; slot < recipeInputs.length; slot++) {
             ItemStack recipeStack = recipeInputs[slot] == null ? null : recipeInputs[slot].copy();
             List<ItemStack> variants = slot < preferredVariantsBySlot.size() ? preferredVariantsBySlot.get(slot)
                 : java.util.Collections.emptyList();
             ItemStack currentStack = slot < currentInputs.length ? currentInputs[slot] : null;
+            if (preserveProvidedInputs && currentInputMatchesRecipeSlot(currentStack, recipeStack, variants)) {
+                stacks.add(withDisplayAmount(currentStack, getEditableAmount(recipeStack)));
+                continue;
+            }
             if (!variants.isEmpty()) {
                 int selectedIndex = selectedVariantIndex(variants, currentStack);
                 ItemStack selected = variants.get(selectedIndex);
@@ -3056,6 +3344,24 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
         }
         return stacks;
+    }
+
+    private boolean currentInputMatchesRecipeSlot(ItemStack currentStack, ItemStack recipeStack,
+        List<ItemStack> variants) {
+        if (currentStack == null || recipeStack == null) {
+            return false;
+        }
+        if (recipeInputAcceptsProvided(recipeStack, currentStack)) {
+            return true;
+        }
+        if (variants != null) {
+            for (ItemStack variant : variants) {
+                if (recipeInputAcceptsProvided(variant, currentStack)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void markRecipeCandidateMatched(RecipeMatchCandidate candidate) {
@@ -3370,12 +3676,17 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void mergeCandidateInputVariants(List<List<ItemStack>> variantsBySlot, GTRecipe recipe) {
-        ItemStack[] inputs = recipeConsumableInputs(recipe);
-        for (int i = 0; i < inputs.length; i++) {
+        List<List<ItemStack>> recipeVariants = buildRecipeInputVariantPreview(
+            recipe,
+            java.util.Collections.emptyList(),
+            false);
+        for (int i = 0; i < recipeVariants.size(); i++) {
             while (variantsBySlot.size() <= i) {
                 variantsBySlot.add(new ArrayList<>());
             }
-            addUniqueVariant(variantsBySlot.get(i), inputs[i]);
+            for (ItemStack variant : recipeVariants.get(i)) {
+                addUniqueVariant(variantsBySlot.get(i), variant);
+            }
         }
     }
 
@@ -3751,6 +4062,60 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         }
     }
 
+    private static final class RateDemand {
+
+        private final ItemStack stack;
+        private final double rate;
+
+        private RateDemand(ItemStack stack, double rate) {
+            this.stack = stack == null ? null : stack.copy();
+            this.rate = rate;
+        }
+    }
+
+    private static final class ProducerMatch {
+
+        private final ProcessNode node;
+        private final ItemStack output;
+        private final double unitRate;
+
+        private ProducerMatch(ProcessNode node, ItemStack output, double unitRate) {
+            this.node = node;
+            this.output = output;
+            this.unitRate = unitRate;
+        }
+    }
+
+    private static final class ByproductDemand {
+
+        private final int producerId;
+        private final ItemStack output;
+        private final double rate;
+
+        private ByproductDemand(int producerId, ItemStack output, double rate) {
+            this.producerId = producerId;
+            this.output = output == null ? null : output.copy();
+            this.rate = rate;
+        }
+    }
+
+    private static final class TargetBalanceResult {
+
+        private boolean ok = true;
+        private String message = "";
+        private final Map<Integer, Integer> parallelByNode = new LinkedHashMap<>();
+        private final Map<Integer, Integer> cycleScaleById = new LinkedHashMap<>();
+        private final Map<Integer, Double> cycleDemandById = new LinkedHashMap<>();
+        private boolean byproductOverflowExpected;
+
+        private static TargetBalanceResult error(String message) {
+            TargetBalanceResult result = new TargetBalanceResult();
+            result.ok = false;
+            result.message = message;
+            return result;
+        }
+    }
+
     private static final class BalanceFraction {
 
         private static final BalanceFraction ZERO = new BalanceFraction(BigInteger.ZERO, BigInteger.ONE);
@@ -3863,17 +4228,52 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void balanceProcess() {
-        ProcessBuildResult result = validateProcessGraph();
+        ProcessBuildResult result = validateLockedTargetProcessGraph();
         if (!result.ok) {
             showError(result.message);
             return;
         }
+        analyzeAndBackfillCycleMaterials(result.nodes);
         if (!propagateSimpleBalance(result.nodes)) {
             showError(tr("superfactory.machine.super_integrated_factory.process.error.balance_failed"));
             return;
         }
         writeEstimatedOutputs(result.nodes);
         showStatus(tr("superfactory.machine.super_integrated_factory.process.status.balanced"), 0xFF75D17C);
+        syncGraph();
+    }
+
+    private void targetBalanceProcess() {
+        ProcessBuildResult result = validateLockedTargetProcessGraph();
+        if (!result.ok) {
+            showError(result.message);
+            return;
+        }
+        GraphAnalysisResult analysis = analyzeAndBackfillCycleMaterials(result.nodes);
+        TargetBalanceResult cycleValidation = validateTargetBalanceCycles(analysis, result.nodes, result.endNodes);
+        if (!cycleValidation.ok) {
+            showError(cycleValidation.message);
+            return;
+        }
+        TargetBalanceResult balanceResult = propagateTargetBalance(result.nodes, result.endNodes, analysis);
+        if (!balanceResult.ok) {
+            showError(balanceResult.message);
+            return;
+        }
+        for (ProcessNode node : result.nodes) {
+            Integer parallel = balanceResult.parallelByNode.get(node.id);
+            if (parallel != null) {
+                node.parallelLimit = node.isRecyclerNode() ? Integer.MAX_VALUE : Math.max(1, parallel);
+            }
+            writeEstimatedOutputs(java.util.Collections.singletonList(node));
+        }
+        refreshOpenEditorFields();
+        String status = tr("superfactory.machine.super_integrated_factory.process.status.target_balanced");
+        if (balanceResult.byproductOverflowExpected) {
+            status += " / "
+                + tr("superfactory.machine.super_integrated_factory.process.warning.byproduct_overflow_expected");
+        }
+        showStatus(status, 0xFF75D17C);
         syncGraph();
     }
 
@@ -3929,6 +4329,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             showError(result.message);
             return;
         }
+        analyzeAndBackfillCycleMaterials(result.nodes);
         if (factory.getBaseMetaTileEntity() != null) {
             syncGraph();
             NetworkLoader.INSTANCE.sendToServer(
@@ -3968,7 +4369,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void exportRawMaterials() {
-        ProcessBuildResult result = validateProcessGraph();
+        ProcessBuildResult result = validateLockedTargetProcessGraph();
         if (!result.ok) {
             showError(result.message);
             return;
@@ -3983,13 +4384,13 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private ProcessBuildResult buildProcessSubmission(boolean requireRequirements) {
-        ProcessBuildResult result = validateProcessGraph();
+        ProcessBuildResult result = validateLockedTargetProcessGraph();
         if (!result.ok) {
             return result;
         }
-        if (!refreshSubmittedNodeRecipes(result.nodes)) {
-            return ProcessBuildResult
-                .error(tr("superfactory.machine.super_integrated_factory.process.error.submitted_recipe_invalid"));
+        GraphAnalysisResult analysis = analyzeAndBackfillCycleMaterials(result.nodes);
+        if (analysis.validation.hasErrors()) {
+            return ProcessBuildResult.error(firstGraphValidationErrorMessage(analysis));
         }
         result.requirements = collectProcessRequirements(result.nodes);
         if (requireRequirements && result.requirements.isEmpty()) {
@@ -3999,19 +4400,148 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return result;
     }
 
-    private ProcessBuildResult validateProcessGraph() {
-        List<ProcessNode> relevantNodes = findRelevantNodes();
+    private String firstGraphValidationErrorMessage(GraphAnalysisResult analysis) {
+        if (analysis != null) {
+            for (GraphValidationError entry : analysis.validation.entries()) {
+                if (entry.severity == GraphValidationError.Severity.ERROR) {
+                    return entry.message;
+                }
+            }
+        }
+        return tr("superfactory.machine.super_integrated_factory.process.error.target_balance_cycle");
+    }
+
+    private GraphAnalysisResult analyzeAndBackfillCycleMaterials(List<ProcessNode> relevantNodes) {
+        GraphAnalysisResult analysis = analyzeRelevantGraph(relevantNodes);
+        Set<Integer> relevantIds = nodeIdSet(relevantNodes);
+        boolean changed = false;
+        for (CycleInfo cycle : analysis.cycles) {
+            if (!cycle.validSingleMaterialCycle || cycle.cycleMaterial == null || !cycleInside(cycle, relevantIds)) {
+                continue;
+            }
+            ProcessNode owner = cycleMaterialOwnerNode(cycle);
+            if (owner == null || owner.cycleMaterialHandler.getStackInSlot(0) != null) {
+                continue;
+            }
+            ItemStack template = findCycleMaterialTemplate(cycle, cycle.cycleMaterial);
+            if (template == null) {
+                continue;
+            }
+            owner.cycleMaterialHandler.setStackInSlot(0, withDisplayAmount(template, 1L));
+            changed = true;
+        }
+        if (changed) {
+            refreshOpenEditorFields();
+            cachedClientGraphAnalysis = null;
+            cachedClientGraphNodeCount = -1;
+            cachedClientGraphEdgeCount = -1;
+            analysis = analyzeRelevantGraph(relevantNodes);
+        }
+        return analysis;
+    }
+
+    private GraphAnalysisResult analyzeRelevantGraph(List<ProcessNode> relevantNodes) {
+        return new ProcessGraphAnalyzer().analyze(copyRelevantGraph(relevantNodes));
+    }
+
+    private ProcessGraph copyRelevantGraph(List<ProcessNode> relevantNodes) {
+        Set<Integer> relevantIds = nodeIdSet(relevantNodes);
+        ProcessGraph copy = new ProcessGraph();
+        copy.nextNodeId = graph.nextNodeId;
+        copy.nextEdgeId = graph.nextEdgeId;
+        copy.viewportX = graph.viewportX;
+        copy.viewportY = graph.viewportY;
+        copy.zoom = graph.zoom;
+        copy.snapToGrid = graph.snapToGrid;
+        for (ProcessNode node : graph.nodes) {
+            if (relevantIds.contains(node.id)) {
+                copy.nodes.add(ProcessNode.readFromNBT(node.writeToNBT()));
+            }
+        }
+        for (ProcessEdge edge : graph.edges) {
+            if (relevantIds.contains(edge.fromNodeId) && relevantIds.contains(edge.toNodeId)) {
+                copy.edges.add(ProcessEdge.readFromNBT(edge.writeToNBT()));
+            }
+        }
+        copy.selectedNodeId = relevantIds.contains(graph.selectedNodeId) ? graph.selectedNodeId
+            : copy.nodes.isEmpty() ? 0 : copy.nodes.get(copy.nodes.size() - 1).id;
+        return copy;
+    }
+
+    private ProcessNode cycleMaterialOwnerNode(CycleInfo cycle) {
+        ProcessNode first = null;
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode node = graph.findNode(nodeId);
+            if (node == null) {
+                continue;
+            }
+            if (first == null) {
+                first = node;
+            }
+            if (node.endNode) {
+                return node;
+            }
+        }
+        return first;
+    }
+
+    private ItemStack findCycleMaterialTemplate(CycleInfo cycle, MaterialKey material) {
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode node = graph.findNode(nodeId);
+            ItemStack stack = findMaterialInHandler(node == null ? null : node.outputHandler, material);
+            if (stack != null) {
+                return stack;
+            }
+        }
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode node = graph.findNode(nodeId);
+            ItemStack stack = findMaterialInHandler(node == null ? null : node.inputHandler, material);
+            if (stack != null) {
+                return stack;
+            }
+        }
+        return null;
+    }
+
+    private ItemStack findMaterialInHandler(ItemStackHandler handler, MaterialKey material) {
+        if (handler == null || material == null) {
+            return null;
+        }
+        for (int slot = 0; slot < handler.getSlots(); slot++) {
+            ItemStack stack = handler.getStackInSlot(slot);
+            if (stack != null && material.equals(materialKeyOf(stack))) {
+                return stack;
+            }
+        }
+        return null;
+    }
+
+    private ProcessBuildResult validateLockedTargetProcessGraph() {
+        ProcessNode orphanLockedNode = firstLockedNodeInComponentWithoutTarget();
+        if (orphanLockedNode != null) {
+            return ProcessBuildResult.error(
+                tr("superfactory.machine.super_integrated_factory.process.error.no_end_node") + ": "
+                    + safeNodeName(orphanLockedNode));
+        }
+        List<ProcessNode> relevantNodes = findRelevantLockedNodes();
         if (relevantNodes.isEmpty()) {
+            if (hasLockedProcessNodes()) {
+                return ProcessBuildResult
+                    .error(tr("superfactory.machine.super_integrated_factory.process.error.no_end_node"));
+            }
             return ProcessBuildResult
                 .error(tr("superfactory.machine.super_integrated_factory.process.error.no_connected_process"));
         }
+        return validateProcessNodes(relevantNodes);
+    }
+
+    private ProcessBuildResult validateProcessGraph() {
+        return validateLockedTargetProcessGraph();
+    }
+
+    private ProcessBuildResult validateProcessNodes(List<ProcessNode> relevantNodes) {
         List<ProcessNode> endNodes = new ArrayList<>();
         for (ProcessNode node : relevantNodes) {
-            if (!node.locked) {
-                return ProcessBuildResult.error(
-                    tr("superfactory.machine.super_integrated_factory.process.error.node_unlocked") + ": "
-                        + safeNodeName(node));
-            }
             if (!node.lastRecipeCheckPassed) {
                 return ProcessBuildResult.error(
                     tr("superfactory.machine.super_integrated_factory.process.error.node_unchecked") + ": "
@@ -4041,60 +4571,820 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return result;
     }
 
-    private List<ProcessNode> findRelevantNodes() {
+    private List<ProcessNode> findRelevantLockedNodes() {
         List<ProcessNode> relevant = new ArrayList<>();
         for (ProcessNode node : graph.nodes) {
-            if (node.endNode) {
-                collectConnectedNodes(node.id, relevant);
+            if (node.endNode && node.locked) {
+                collectConnectedLockedNodes(node.id, relevant);
             }
         }
         return relevant;
     }
 
-    private void collectConnectedNodes(int nodeId, List<ProcessNode> relevant) {
+    private boolean hasLockedProcessNodes() {
+        for (ProcessNode node : graph.nodes) {
+            if (node.locked) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private ProcessNode firstLockedNodeInComponentWithoutTarget() {
+        Set<Integer> visited = new HashSet<>();
+        for (ProcessNode node : graph.nodes) {
+            if (!node.locked || visited.contains(node.id)) {
+                continue;
+            }
+            List<ProcessNode> component = new ArrayList<>();
+            collectConnectedLockedNodes(node.id, component);
+            boolean hasTarget = false;
+            for (ProcessNode componentNode : component) {
+                visited.add(componentNode.id);
+                if (componentNode.endNode) {
+                    hasTarget = true;
+                }
+            }
+            if (!hasTarget) {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    private void collectConnectedLockedNodes(int nodeId, List<ProcessNode> relevant) {
         ProcessNode node = graph.findNode(nodeId);
-        if (node == null || relevant.contains(node)) {
+        if (node == null || !node.locked || relevant.contains(node)) {
             return;
         }
         relevant.add(node);
         for (ProcessEdge edge : graph.edges) {
             if (edge.fromNodeId == nodeId) {
-                collectConnectedNodes(edge.toNodeId, relevant);
+                collectConnectedLockedNodes(edge.toNodeId, relevant);
             }
             if (edge.toNodeId == nodeId) {
-                collectConnectedNodes(edge.fromNodeId, relevant);
+                collectConnectedLockedNodes(edge.fromNodeId, relevant);
             }
         }
     }
 
-    private boolean hasAnyCycle(List<ProcessNode> relevantNodes) {
-        Set<Integer> relevantIds = new HashSet<>();
-        for (ProcessNode node : relevantNodes) {
-            relevantIds.add(node.id);
+    private TargetBalanceResult validateTargetBalanceCycles(GraphAnalysisResult analysis,
+        List<ProcessNode> relevantNodes, List<ProcessNode> targetNodes) {
+        if (analysis == null || analysis.cycles.isEmpty()) {
+            return new TargetBalanceResult();
         }
+        Set<Integer> relevantIds = nodeIdSet(relevantNodes);
+        Set<Integer> targetIds = nodeIdSet(targetNodes);
+        for (CycleInfo cycle : analysis.cycles) {
+            if (!cycleInside(cycle, relevantIds)) {
+                continue;
+            }
+            if (!cycle.validSingleMaterialCycle || !cycle.positiveNetOutput || cycle.cycleMaterial == null) {
+                return TargetBalanceResult
+                    .error(tr("superfactory.machine.super_integrated_factory.process.error.target_balance_bad_cycle"));
+            }
+            List<Integer> cycleTargets = targetIdsInCycle(cycle, targetIds);
+            if (cycleTargets.isEmpty()) {
+                continue;
+            }
+            if (cycleTargets.size() > 1) {
+                return TargetBalanceResult.error(
+                    tr("superfactory.machine.super_integrated_factory.process.error.target_balance_target_cycle"));
+            }
+            ProcessNode target = graph.findNode(cycleTargets.get(0));
+            if (!nodeNetProducesMaterial(target, cycle.cycleMaterial)
+                || cycleMaterialHasExternalConsumer(cycle, cycle.cycleMaterial)) {
+                return TargetBalanceResult.error(
+                    tr("superfactory.machine.super_integrated_factory.process.error.target_balance_target_cycle"));
+            }
+        }
+        return new TargetBalanceResult();
+    }
+
+    private TargetBalanceResult propagateTargetBalance(List<ProcessNode> relevantNodes, List<ProcessNode> targetNodes,
+        GraphAnalysisResult analysis) {
+        Set<Integer> relevantIds = nodeIdSet(relevantNodes);
+        Set<Integer> targetIds = nodeIdSet(targetNodes);
+        if (targetDownstreamReachesAnotherTarget(targetNodes, targetIds, relevantIds)) {
+            return TargetBalanceResult
+                .error(tr("superfactory.machine.super_integrated_factory.process.error.target_balance_cross_target"));
+        }
+
+        TargetBalanceResult result = new TargetBalanceResult();
+        Map<Integer, List<RateDemand>> inputDemands = new LinkedHashMap<>();
+        Map<String, Boolean> trunkEdges = new LinkedHashMap<>();
+        Map<Integer, Boolean> byproductNodes = new LinkedHashMap<>();
         for (ProcessNode node : relevantNodes) {
-            List<Integer> path = new ArrayList<>();
-            if (hasCycleFrom(node.id, relevantIds, path)) {
-                return true;
+            int initialParallel = targetIds.contains(node.id) ? Math.max(1, node.parallelLimit) : 0;
+            result.parallelByNode.put(node.id, node.isRecyclerNode() ? Integer.MAX_VALUE : initialParallel);
+            node.estimatedOutputLine = "";
+        }
+        ArrayDeque<Integer> demandQueue = new ArrayDeque<>();
+        Set<Integer> queuedDemandNodes = new HashSet<>();
+        Map<Integer, Integer> processedDemandIndex = new LinkedHashMap<>();
+        for (ProcessNode target : targetNodes) {
+            addNodeInputDemands(inputDemands, target, Math.max(1, target.parallelLimit));
+            enqueueDemandNode(demandQueue, queuedDemandNodes, target.id);
+        }
+
+        while (!demandQueue.isEmpty()) {
+            int consumerId = demandQueue.removeFirst();
+            queuedDemandNodes.remove(consumerId);
+            ProcessNode consumer = graph.findNode(consumerId);
+            if (consumer == null) {
+                continue;
+            }
+            List<RateDemand> demands = inputDemands.get(consumer.id);
+            if (demands == null || demands.isEmpty()) {
+                continue;
+            }
+            int startIndex = processedDemandIndex.getOrDefault(consumer.id, 0);
+            for (int demandIndex = startIndex; demandIndex < demands.size(); demandIndex++) {
+                RateDemand demand = demands.get(demandIndex);
+                if (handleNormalCycleSupplierDemand(
+                    consumer,
+                    demand,
+                    relevantIds,
+                    targetIds,
+                    byproductNodes,
+                    inputDemands,
+                    demandQueue,
+                    queuedDemandNodes,
+                    trunkEdges,
+                    result,
+                    analysis)) {
+                    if (!result.ok) {
+                        return result;
+                    }
+                    continue;
+                }
+                List<ProducerMatch> producers = matchingIncomingProducers(consumer, demand.stack, relevantIds);
+                if (producers.isEmpty()) {
+                    continue;
+                }
+                double totalUnitRate = totalProducerUnitRate(producers);
+                if (totalUnitRate <= 0.0D) {
+                    return TargetBalanceResult
+                        .error(tr("superfactory.machine.super_integrated_factory.process.error.target_balance_failed"));
+                }
+                for (ProducerMatch producer : producers) {
+                    double share = demand.rate * producer.unitRate / totalUnitRate;
+                    int oldParallel = currentRecommendedParallel(result.parallelByNode, producer.node);
+                    int requiredParallel = ceilParallel(share, producer.unitRate);
+                    raiseRecommendedParallel(result.parallelByNode, producer.node, requiredParallel);
+                    int newParallel = currentRecommendedParallel(result.parallelByNode, producer.node);
+                    if (!byproductNodes.containsKey(producer.node.id) && !targetIds.contains(producer.node.id)
+                        && !producer.node.isRecyclerNode()
+                        && newParallel > oldParallel) {
+                        addNodeInputDemands(inputDemands, producer.node, newParallel - oldParallel);
+                        enqueueDemandNode(demandQueue, queuedDemandNodes, producer.node.id);
+                    }
+                    trunkEdges.put(edgeKey(producer.node.id, consumer.id), Boolean.TRUE);
+                }
+            }
+            processedDemandIndex.put(consumer.id, demands.size());
+        }
+
+        propagateAcyclicByproductBalance(
+            relevantNodes,
+            relevantIds,
+            targetIds,
+            trunkEdges,
+            byproductNodes,
+            inputDemands,
+            result);
+        return result;
+    }
+
+    private void propagateAcyclicByproductBalance(List<ProcessNode> relevantNodes, Set<Integer> relevantIds,
+        Set<Integer> targetIds, Map<String, Boolean> trunkEdges, Map<Integer, Boolean> byproductNodes,
+        Map<Integer, List<RateDemand>> inputDemands, TargetBalanceResult result) {
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        Set<Integer> trunkNodeIds = trunkNodeIds(trunkEdges, targetIds);
+        ArrayDeque<Integer> demandQueue = new ArrayDeque<>();
+        Set<Integer> queuedDemandNodes = new HashSet<>();
+        Map<Integer, Integer> processedDemandIndex = new LinkedHashMap<>();
+        ArrayDeque<ByproductDemand> byproductQueue = new ArrayDeque<>();
+        for (ProcessNode producer : relevantNodes) {
+            if (!trunkNodeIds.contains(producer.id) || producer.isRecyclerNode()) {
+                continue;
+            }
+            int producerParallel = result.parallelByNode.getOrDefault(producer.id, Math.max(1, producer.parallelLimit));
+            for (int outputSlot = 0; outputSlot < producer.outputHandler.getSlots(); outputSlot++) {
+                ItemStack output = producer.outputHandler.getStackInSlot(outputSlot);
+                if (output == null) {
+                    continue;
+                }
+                if (isNormalCycleMaterialOutput(producer, output, analysis, targetIds)) {
+                    continue;
+                }
+                double outputRate = outputRatePerParallel(producer, outputSlot) * producerParallel;
+                if (outputRate <= 0.0D) {
+                    continue;
+                }
+                byproductQueue.add(new ByproductDemand(producer.id, output, outputRate));
+            }
+        }
+
+        while (result.ok && (!demandQueue.isEmpty() || !byproductQueue.isEmpty())) {
+            while (result.ok && !demandQueue.isEmpty()) {
+                int consumerId = demandQueue.removeFirst();
+                queuedDemandNodes.remove(consumerId);
+                ProcessNode consumer = graph.findNode(consumerId);
+                if (consumer == null) {
+                    continue;
+                }
+                processTargetBalanceInputDemands(
+                    consumer,
+                    relevantIds,
+                    targetIds,
+                    byproductNodes,
+                    inputDemands,
+                    demandQueue,
+                    queuedDemandNodes,
+                    processedDemandIndex,
+                    trunkEdges,
+                    result);
+            }
+            if (!result.ok || byproductQueue.isEmpty()) {
+                continue;
+            }
+            ByproductDemand byproductDemand = byproductQueue.removeFirst();
+            List<ProcessNode> raisedConsumers = addByproductDemands(
+                byproductDemand.producerId,
+                byproductDemand.output,
+                byproductDemand.rate,
+                relevantIds,
+                targetIds,
+                trunkEdges,
+                byproductNodes,
+                inputDemands,
+                demandQueue,
+                queuedDemandNodes,
+                result);
+            for (ProcessNode raisedConsumer : raisedConsumers) {
+                int parallel = currentRecommendedParallel(result.parallelByNode, raisedConsumer);
+                for (int outputSlot = 0; outputSlot < raisedConsumer.outputHandler.getSlots(); outputSlot++) {
+                    ItemStack output = raisedConsumer.outputHandler.getStackInSlot(outputSlot);
+                    if (output == null) {
+                        continue;
+                    }
+                    if (isNormalCycleMaterialOutput(raisedConsumer, output, analysis, targetIds)) {
+                        continue;
+                    }
+                    double outputRate = outputRatePerParallel(raisedConsumer, outputSlot) * parallel;
+                    if (outputRate > 0.0D) {
+                        byproductQueue.add(new ByproductDemand(raisedConsumer.id, output, outputRate));
+                    }
+                }
+            }
+        }
+    }
+
+    private Set<Integer> nodeIdSet(List<ProcessNode> nodes) {
+        Set<Integer> ids = new HashSet<>();
+        for (ProcessNode node : nodes) {
+            ids.add(node.id);
+        }
+        return ids;
+    }
+
+    private boolean targetDownstreamReachesAnotherTarget(List<ProcessNode> targetNodes, Set<Integer> targetIds,
+        Set<Integer> relevantIds) {
+        for (ProcessNode target : targetNodes) {
+            Set<Integer> visited = new HashSet<>();
+            ArrayDeque<Integer> queue = new ArrayDeque<>();
+            queue.add(target.id);
+            visited.add(target.id);
+            while (!queue.isEmpty()) {
+                int nodeId = queue.removeFirst();
+                for (ProcessEdge edge : graph.edges) {
+                    if (edge.fromNodeId != nodeId || !relevantIds.contains(edge.toNodeId)
+                        || visited.contains(edge.toNodeId)) {
+                        continue;
+                    }
+                    if (targetIds.contains(edge.toNodeId)) {
+                        return true;
+                    }
+                    visited.add(edge.toNodeId);
+                    queue.add(edge.toNodeId);
+                }
             }
         }
         return false;
     }
 
-    private boolean hasCycleFrom(int nodeId, Set<Integer> relevantIds, List<Integer> path) {
-        int existingIndex = path.indexOf(nodeId);
-        if (existingIndex >= 0) {
+    private void addNodeInputDemands(Map<Integer, List<RateDemand>> inputDemands, ProcessNode node, int parallel) {
+        if (node == null || node.isRecyclerNode() || parallel <= 0) {
+            return;
+        }
+        addNodeInputDemandsExcept(inputDemands, node, parallel, null);
+    }
+
+    private void addNodeInputDemandsExcept(Map<Integer, List<RateDemand>> inputDemands, ProcessNode node, int parallel,
+        ItemStack excludedInput) {
+        if (node == null || node.isRecyclerNode() || parallel <= 0) {
+            return;
+        }
+        double duration = Math.max(1, node.durationTicks);
+        for (int inputSlot = 0; inputSlot < node.inputHandler.getSlots(); inputSlot++) {
+            ItemStack input = node.inputHandler.getStackInSlot(inputSlot);
+            if (input != null && (excludedInput == null || !inputAcceptsOutput(input, excludedInput))) {
+                addRateDemand(inputDemands, node, input, getEditableAmount(input) * parallel / duration);
+            }
+        }
+    }
+
+    private void enqueueDemandNode(ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes, int nodeId) {
+        if (queuedDemandNodes.add(nodeId)) {
+            demandQueue.add(nodeId);
+        }
+    }
+
+    private void addRateDemand(Map<Integer, List<RateDemand>> inputDemands, ProcessNode node, ItemStack stack,
+        double rate) {
+        if (node == null || stack == null || rate <= 0.0D) {
+            return;
+        }
+        inputDemands.computeIfAbsent(node.id, ignored -> new ArrayList<>())
+            .add(new RateDemand(stack, rate));
+    }
+
+    private void processTargetBalanceInputDemands(ProcessNode consumer, Set<Integer> relevantIds,
+        Set<Integer> targetIds, Map<Integer, Boolean> byproductNodes, Map<Integer, List<RateDemand>> inputDemands,
+        ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes, Map<Integer, Integer> processedDemandIndex,
+        Map<String, Boolean> trunkEdges, TargetBalanceResult result) {
+        List<RateDemand> demands = inputDemands.get(consumer.id);
+        if (demands == null || demands.isEmpty()) {
+            return;
+        }
+        int startIndex = processedDemandIndex.getOrDefault(consumer.id, 0);
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        for (int demandIndex = startIndex; demandIndex < demands.size(); demandIndex++) {
+            RateDemand demand = demands.get(demandIndex);
+            if (handleNormalCycleSupplierDemand(
+                consumer,
+                demand,
+                relevantIds,
+                targetIds,
+                byproductNodes,
+                inputDemands,
+                demandQueue,
+                queuedDemandNodes,
+                trunkEdges,
+                result,
+                analysis)) {
+                if (!result.ok) {
+                    return;
+                }
+                continue;
+            }
+            List<ProducerMatch> producers = matchingIncomingProducers(consumer, demand.stack, relevantIds);
+            if (producers.isEmpty()) {
+                continue;
+            }
+            double totalUnitRate = totalProducerUnitRate(producers);
+            if (totalUnitRate <= 0.0D) {
+                result.ok = false;
+                result.message = tr(
+                    "superfactory.machine.super_integrated_factory.process.error.target_balance_failed");
+                return;
+            }
+            for (ProducerMatch producer : producers) {
+                double share = demand.rate * producer.unitRate / totalUnitRate;
+                int oldParallel = currentRecommendedParallel(result.parallelByNode, producer.node);
+                int requiredParallel = ceilParallel(share, producer.unitRate);
+                raiseRecommendedParallel(result.parallelByNode, producer.node, requiredParallel);
+                int newParallel = currentRecommendedParallel(result.parallelByNode, producer.node);
+                if (!byproductNodes.containsKey(producer.node.id) && !targetIds.contains(producer.node.id)
+                    && !producer.node.isRecyclerNode()
+                    && newParallel > oldParallel) {
+                    addNodeInputDemands(inputDemands, producer.node, newParallel - oldParallel);
+                    enqueueDemandNode(demandQueue, queuedDemandNodes, producer.node.id);
+                }
+                if (!byproductNodes.containsKey(consumer.id)) {
+                    trunkEdges.put(edgeKey(producer.node.id, consumer.id), Boolean.TRUE);
+                }
+            }
+        }
+        processedDemandIndex.put(consumer.id, demands.size());
+    }
+
+    private List<ProducerMatch> matchingIncomingProducers(ProcessNode consumer, ItemStack demandStack,
+        Set<Integer> relevantIds) {
+        List<ProducerMatch> producers = new ArrayList<>();
+        if (consumer == null || demandStack == null) {
+            return producers;
+        }
+        for (ProcessEdge edge : graph.edges) {
+            if (edge.toNodeId != consumer.id || !relevantIds.contains(edge.fromNodeId)) {
+                continue;
+            }
+            ProcessNode producer = graph.findNode(edge.fromNodeId);
+            if (producer == null || producer.isRecyclerNode()) {
+                continue;
+            }
+            for (int outputSlot = 0; outputSlot < producer.outputHandler.getSlots(); outputSlot++) {
+                ItemStack output = producer.outputHandler.getStackInSlot(outputSlot);
+                if (output != null && inputAcceptsOutput(demandStack, output)) {
+                    double unitRate = outputRatePerParallel(producer, outputSlot);
+                    if (unitRate > 0.0D) {
+                        producers.add(new ProducerMatch(producer, output, unitRate));
+                    }
+                }
+            }
+        }
+        return producers;
+    }
+
+    private boolean handleNormalCycleSupplierDemand(ProcessNode consumer, RateDemand demand, Set<Integer> relevantIds,
+        Set<Integer> targetIds, Map<Integer, Boolean> byproductNodes, Map<Integer, List<RateDemand>> inputDemands,
+        ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes, Map<String, Boolean> trunkEdges,
+        TargetBalanceResult result, GraphAnalysisResult analysis) {
+        if (consumer == null || demand == null || demand.stack == null || analysis == null) {
+            return false;
+        }
+        MaterialKey demandKey = materialKeyOf(demand.stack);
+        if (demandKey == null) {
+            return false;
+        }
+        Map<Integer, Double> supplierUnitRates = new LinkedHashMap<>();
+        Map<Integer, CycleInfo> suppliersByCycleId = new LinkedHashMap<>();
+        for (ProcessEdge edge : graph.edges) {
+            if (edge.toNodeId != consumer.id || !relevantIds.contains(edge.fromNodeId)) {
+                continue;
+            }
+            CycleInfo cycle = analysis.cycleByNodeId.get(edge.fromNodeId);
+            if (!isNormalSupplierCycle(cycle, targetIds) || !demandKey.equals(cycle.cycleMaterial)) {
+                continue;
+            }
+            ProcessNode producer = graph.findNode(edge.fromNodeId);
+            if (producer == null || !edgeCanCarryMaterial(edge, producer, consumer, cycle.cycleMaterial)) {
+                continue;
+            }
+            supplierUnitRates
+                .put(cycle.cycleId, Math.max(supplierUnitRates.getOrDefault(cycle.cycleId, 0.0D), cycle.netRate));
+            suppliersByCycleId.put(cycle.cycleId, cycle);
+            if (!byproductNodes.containsKey(consumer.id)) {
+                trunkEdges.put(edgeKey(edge.fromNodeId, consumer.id), Boolean.TRUE);
+            }
+        }
+        if (supplierUnitRates.isEmpty()) {
+            return false;
+        }
+        double totalUnitRate = 0.0D;
+        for (double unitRate : supplierUnitRates.values()) {
+            totalUnitRate += unitRate;
+        }
+        if (totalUnitRate <= 0.0D) {
+            result.ok = false;
+            result.message = tr("superfactory.machine.super_integrated_factory.process.error.target_balance_failed");
             return true;
         }
-        path.add(nodeId);
+        for (Map.Entry<Integer, Double> entry : supplierUnitRates.entrySet()) {
+            CycleInfo cycle = suppliersByCycleId.get(entry.getKey());
+            double share = demand.rate * entry.getValue() / totalUnitRate;
+            raiseNormalCycleSupplier(cycle, share, inputDemands, demandQueue, queuedDemandNodes, result);
+        }
+        return true;
+    }
+
+    private void raiseNormalCycleSupplier(CycleInfo cycle, double demandedRate,
+        Map<Integer, List<RateDemand>> inputDemands, ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes,
+        TargetBalanceResult result) {
+        if (cycle == null || demandedRate <= 0.0D || cycle.netRate <= 0.0D) {
+            return;
+        }
+        double totalDemand = result.cycleDemandById.getOrDefault(cycle.cycleId, 0.0D) + demandedRate;
+        result.cycleDemandById.put(cycle.cycleId, totalDemand);
+        int oldScale = result.cycleScaleById.getOrDefault(cycle.cycleId, 0);
+        int newScale = ceilParallel(totalDemand, cycle.netRate);
+        if (newScale <= oldScale) {
+            return;
+        }
+        result.cycleScaleById.put(cycle.cycleId, newScale);
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode node = graph.findNode(nodeId);
+            if (node == null || node.isRecyclerNode()) {
+                continue;
+            }
+            int baseParallel = Math.max(1, node.parallelLimit);
+            int oldParallel = safeScaleParallel(baseParallel, oldScale);
+            int newParallel = safeScaleParallel(baseParallel, newScale);
+            raiseRecommendedParallel(result.parallelByNode, node, newParallel);
+            int delta = Math.max(0, newParallel - oldParallel);
+            if (delta > 0) {
+                addNodeInputDemandsExceptMaterial(inputDemands, node, delta, cycle.cycleMaterial);
+                enqueueDemandNode(demandQueue, queuedDemandNodes, node.id);
+            }
+        }
+    }
+
+    private int safeScaleParallel(int baseParallel, int scale) {
+        if (scale <= 0) {
+            return 0;
+        }
+        if (baseParallel > Integer.MAX_VALUE / scale) {
+            return Integer.MAX_VALUE;
+        }
+        return Math.max(1, baseParallel * scale);
+    }
+
+    private void addNodeInputDemandsExceptMaterial(Map<Integer, List<RateDemand>> inputDemands, ProcessNode node,
+        int parallel, MaterialKey excludedMaterial) {
+        if (node == null || node.isRecyclerNode() || parallel <= 0) {
+            return;
+        }
+        double duration = Math.max(1, node.durationTicks);
+        for (int inputSlot = 0; inputSlot < node.inputHandler.getSlots(); inputSlot++) {
+            ItemStack input = node.inputHandler.getStackInSlot(inputSlot);
+            MaterialKey inputKey = materialKeyOf(input);
+            if (input != null && (excludedMaterial == null || !excludedMaterial.equals(inputKey))) {
+                addRateDemand(inputDemands, node, input, getEditableAmount(input) * parallel / duration);
+            }
+        }
+    }
+
+    private double totalProducerUnitRate(List<ProducerMatch> producers) {
+        double total = 0.0D;
+        for (ProducerMatch producer : producers) {
+            total += producer.unitRate;
+        }
+        return total;
+    }
+
+    private void raiseRecommendedParallel(Map<Integer, Integer> parallelByNode, ProcessNode node, int required) {
+        if (node == null) {
+            return;
+        }
+        if (node.isRecyclerNode()) {
+            parallelByNode.put(node.id, Integer.MAX_VALUE);
+            return;
+        }
+        parallelByNode.put(node.id, Math.max(parallelByNode.getOrDefault(node.id, 1), Math.max(1, required)));
+    }
+
+    private int currentRecommendedParallel(Map<Integer, Integer> parallelByNode, ProcessNode node) {
+        if (node == null) {
+            return 0;
+        }
+        return Math.max(0, parallelByNode.getOrDefault(node.id, 0));
+    }
+
+    private int ceilParallel(double requiredRate, double unitRate) {
+        if (requiredRate <= 0.0D) {
+            return 1;
+        }
+        if (unitRate <= 0.0D) {
+            return Integer.MAX_VALUE;
+        }
+        double value = Math.ceil(requiredRate / unitRate - 1.0E-9D);
+        if (value >= Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return Math.max(1, (int) value);
+    }
+
+    private double outputRatePerParallel(ProcessNode node, int outputSlot) {
+        long numerator = expectedOutputNumerator(node, outputSlot);
+        if (numerator <= 0L) {
+            return 0.0D;
+        }
+        return numerator / 10000.0D / Math.max(1, node.durationTicks);
+    }
+
+    private double consumerInputUnitRate(ProcessNode consumer, ItemStack output) {
+        if (consumer == null || output == null || consumer.isRecyclerNode()) {
+            return 0.0D;
+        }
+        return matchingInputAmount(consumer, output) / (double) Math.max(1, consumer.durationTicks);
+    }
+
+    private Set<Integer> trunkNodeIds(Map<String, Boolean> trunkEdges, Set<Integer> targetIds) {
+        Set<Integer> ids = new HashSet<>(targetIds);
+        for (String key : trunkEdges.keySet()) {
+            int separator = key.indexOf("->");
+            if (separator > 0) {
+                ids.add(parseInt(key.substring(0, separator), -1));
+                ids.add(parseInt(key.substring(separator + 2), -1));
+            }
+        }
+        ids.remove(-1);
+        return ids;
+    }
+
+    private String edgeKey(int fromNodeId, int toNodeId) {
+        return fromNodeId + "->" + toNodeId;
+    }
+
+    private List<ProcessNode> addByproductDemands(int producerId, ItemStack output, double outputRate,
+        Set<Integer> relevantIds, Set<Integer> targetIds, Map<String, Boolean> trunkEdges,
+        Map<Integer, Boolean> byproductNodes, Map<Integer, List<RateDemand>> inputDemands,
+        ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes, TargetBalanceResult result) {
+        List<ProcessNode> raisedConsumers = new ArrayList<>();
+        if (outputRate <= 0.0D || output == null || !result.ok) {
+            return raisedConsumers;
+        }
+        List<ProcessNode> consumers = matchingNonTrunkConsumers(producerId, output, relevantIds, targetIds, trunkEdges);
+        if (consumers.isEmpty()) {
+            result.byproductOverflowExpected = true;
+            return raisedConsumers;
+        }
+        double totalUnitRate = totalConsumerUnitRate(consumers, output);
+        if (totalUnitRate <= 0.0D) {
+            result.byproductOverflowExpected = true;
+            return raisedConsumers;
+        }
+        for (ProcessNode consumer : consumers) {
+            if (targetIds.contains(consumer.id)) {
+                result.ok = false;
+                result.message = tr(
+                    "superfactory.machine.super_integrated_factory.process.error.target_balance_cross_target");
+                return raisedConsumers;
+            }
+            ItemStack inputTemplate = matchingConsumerInputTemplate(consumer, output);
+            double share = outputRate * consumerInputUnitRate(consumer, output) / totalUnitRate;
+            byproductNodes.put(consumer.id, Boolean.TRUE);
+            int oldParallel = currentRecommendedParallel(result.parallelByNode, consumer);
+            int requiredParallel = ceilParallel(share, consumerInputUnitRate(consumer, output));
+            raiseRecommendedParallel(result.parallelByNode, consumer, requiredParallel);
+            int newParallel = currentRecommendedParallel(result.parallelByNode, consumer);
+            if (!consumer.isRecyclerNode() && newParallel > oldParallel) {
+                addNodeInputDemandsExcept(inputDemands, consumer, newParallel - oldParallel, inputTemplate);
+                enqueueDemandNode(demandQueue, queuedDemandNodes, consumer.id);
+                raisedConsumers.add(consumer);
+            }
+        }
+        return raisedConsumers;
+    }
+
+    private List<ProcessNode> matchingNonTrunkConsumers(int producerId, ItemStack output, Set<Integer> relevantIds,
+        Set<Integer> targetIds, Map<String, Boolean> trunkEdges) {
+        List<ProcessNode> consumers = new ArrayList<>();
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
         for (ProcessEdge edge : graph.edges) {
-            if (edge.fromNodeId == nodeId && relevantIds.contains(edge.toNodeId)
-                && hasCycleFrom(edge.toNodeId, relevantIds, path)) {
+            if (edge.fromNodeId != producerId || !relevantIds.contains(edge.toNodeId)
+                || trunkEdges.containsKey(edgeKey(edge.fromNodeId, edge.toNodeId))) {
+                continue;
+            }
+            if (isNormalCycleInternalEdge(edge.fromNodeId, edge.toNodeId, analysis, targetIds)) {
+                continue;
+            }
+            ProcessNode consumer = graph.findNode(edge.toNodeId);
+            if (consumer != null && matchingInputAmount(consumer, output) > 0L) {
+                consumers.add(consumer);
+            }
+        }
+        return consumers;
+    }
+
+    private boolean cycleInside(CycleInfo cycle, Set<Integer> relevantIds) {
+        for (Integer nodeId : cycle.nodeIds) {
+            if (!relevantIds.contains(nodeId)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private List<Integer> targetIdsInCycle(CycleInfo cycle, Set<Integer> targetIds) {
+        List<Integer> result = new ArrayList<>();
+        for (Integer nodeId : cycle.nodeIds) {
+            if (targetIds.contains(nodeId)) {
+                result.add(nodeId);
+            }
+        }
+        return result;
+    }
+
+    private boolean isNormalSupplierCycle(CycleInfo cycle, Set<Integer> targetIds) {
+        return cycle != null && cycle.validSingleMaterialCycle
+            && cycle.positiveNetOutput
+            && cycle.cycleMaterial != null
+            && targetIdsInCycle(cycle, targetIds).isEmpty();
+    }
+
+    private boolean nodeProducesMaterial(ProcessNode node, MaterialKey material) {
+        if (node == null || material == null) {
+            return false;
+        }
+        for (int outputSlot = 0; outputSlot < node.outputHandler.getSlots(); outputSlot++) {
+            if (material.equals(materialKeyOf(node.outputHandler.getStackInSlot(outputSlot)))) {
                 return true;
             }
         }
-        path.remove(path.size() - 1);
         return false;
+    }
+
+    private boolean nodeConsumesMaterial(ProcessNode node, MaterialKey material) {
+        if (node == null || material == null) {
+            return false;
+        }
+        for (int inputSlot = 0; inputSlot < node.inputHandler.getSlots(); inputSlot++) {
+            if (material.equals(materialKeyOf(node.inputHandler.getStackInSlot(inputSlot)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean nodeNetProducesMaterial(ProcessNode node, MaterialKey material) {
+        return nodeMaterialProducedRate(node, material) > nodeMaterialConsumedRate(node, material);
+    }
+
+    private double nodeMaterialProducedRate(ProcessNode node, MaterialKey material) {
+        if (node == null || material == null) {
+            return 0.0D;
+        }
+        double rate = 0.0D;
+        for (int outputSlot = 0; outputSlot < node.outputHandler.getSlots(); outputSlot++) {
+            if (material.equals(materialKeyOf(node.outputHandler.getStackInSlot(outputSlot)))) {
+                rate += outputRatePerParallel(node, outputSlot) * Math.max(1, node.parallelLimit);
+            }
+        }
+        return rate;
+    }
+
+    private double nodeMaterialConsumedRate(ProcessNode node, MaterialKey material) {
+        if (node == null || material == null || node.isRecyclerNode()) {
+            return 0.0D;
+        }
+        double rate = 0.0D;
+        double duration = Math.max(1, node.durationTicks);
+        int parallel = Math.max(1, node.parallelLimit);
+        for (int inputSlot = 0; inputSlot < node.inputHandler.getSlots(); inputSlot++) {
+            ItemStack input = node.inputHandler.getStackInSlot(inputSlot);
+            if (material.equals(materialKeyOf(input))) {
+                rate += getEditableAmount(input) * parallel / duration;
+            }
+        }
+        return rate;
+    }
+
+    private boolean cycleMaterialHasExternalConsumer(CycleInfo cycle, MaterialKey material) {
+        Set<Integer> cycleNodeIds = new HashSet<>(cycle.nodeIds);
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode producer = graph.findNode(nodeId);
+            if (producer == null || !nodeProducesMaterial(producer, material)) {
+                continue;
+            }
+            for (ProcessEdge edge : graph.edges) {
+                if (edge.fromNodeId != nodeId || cycleNodeIds.contains(edge.toNodeId)) {
+                    continue;
+                }
+                ProcessNode consumer = graph.findNode(edge.toNodeId);
+                if (consumer != null && edgeCanCarryMaterial(edge, producer, consumer, material)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean edgeCanCarryMaterial(ProcessEdge edge, ProcessNode producer, ProcessNode consumer,
+        MaterialKey material) {
+        MaterialKey edgeMaterial = MaterialKey.parse(edge.resourceKey);
+        if (edgeMaterial != null) {
+            return edgeMaterial.equals(material);
+        }
+        return nodeProducesMaterial(producer, material) && nodeConsumesMaterial(consumer, material);
+    }
+
+    private boolean isNormalCycleInternalEdge(int fromNodeId, int toNodeId, GraphAnalysisResult analysis,
+        Set<Integer> targetIds) {
+        if (analysis == null) {
+            return false;
+        }
+        CycleInfo fromCycle = analysis.cycleByNodeId.get(fromNodeId);
+        CycleInfo toCycle = analysis.cycleByNodeId.get(toNodeId);
+        return fromCycle != null && fromCycle == toCycle && isNormalSupplierCycle(fromCycle, targetIds);
+    }
+
+    private boolean isNormalCycleMaterialOutput(ProcessNode producer, ItemStack output, GraphAnalysisResult analysis,
+        Set<Integer> targetIds) {
+        if (producer == null || output == null || analysis == null) {
+            return false;
+        }
+        CycleInfo cycle = analysis.cycleByNodeId.get(producer.id);
+        return isNormalSupplierCycle(cycle, targetIds) && cycle.cycleMaterial.equals(materialKeyOf(output));
+    }
+
+    private double totalConsumerUnitRate(List<ProcessNode> consumers, ItemStack output) {
+        double total = 0.0D;
+        for (ProcessNode consumer : consumers) {
+            total += consumerInputUnitRate(consumer, output);
+        }
+        return total;
+    }
+
+    private ItemStack matchingConsumerInputTemplate(ProcessNode consumer, ItemStack output) {
+        for (int inputSlot = 0; inputSlot < consumer.inputHandler.getSlots(); inputSlot++) {
+            ItemStack input = consumer.inputHandler.getStackInSlot(inputSlot);
+            if (input != null && inputAcceptsOutput(input, output)) {
+                return input;
+            }
+        }
+        return output;
     }
 
     private boolean propagateSimpleBalance(List<ProcessNode> relevantNodes) {
@@ -4994,52 +6284,6 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
         }
         return null;
-    }
-
-    private boolean refreshSubmittedNodeRecipes(List<ProcessNode> nodes) {
-        ProcessNode previousEditingNode = editingNode;
-        boolean previousEditorOpen = editorOpen;
-        for (ProcessNode node : nodes) {
-            if (node.isRecyclerNode()) {
-                initializeRecyclerNode(node);
-                node.locked = true;
-                continue;
-            }
-            if (node.fakeRecipeSnapshot) {
-                editingNode = node;
-                if (!validateVirtualRecipeSnapshot(node, false)) {
-                    editingNode = previousEditingNode;
-                    editorOpen = previousEditorOpen;
-                    return false;
-                }
-                node.lastRecipeCheckPassed = true;
-                node.recipeFingerprint = node.buildRecipeFingerprint();
-                node.locked = true;
-                continue;
-            }
-            editingNode = node;
-            List<RecipeMatchCandidate> candidates = findRecipeCandidates(node);
-            RecipeMatchCandidate selected = null;
-            for (RecipeMatchCandidate candidate : candidates) {
-                if (recipeRatioMatches(node, candidate.recipeMap, candidate.recipe)) {
-                    selected = candidate;
-                    break;
-                }
-            }
-            if (selected == null && candidates.size() == 1) {
-                selected = candidates.get(0);
-            }
-            if (selected == null) {
-                editingNode = previousEditingNode;
-                editorOpen = previousEditorOpen;
-                return false;
-            }
-            applyRecipeCandidate(selected);
-            node.locked = true;
-        }
-        editingNode = previousEditingNode;
-        editorOpen = previousEditorOpen;
-        return true;
     }
 
     private void collectNodeNonConsumables(ProcessRequirements requirements, ProcessNode node) {

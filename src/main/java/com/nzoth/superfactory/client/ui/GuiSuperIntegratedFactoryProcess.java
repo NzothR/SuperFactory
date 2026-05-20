@@ -3203,7 +3203,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             if (preserveProvidedInputs) {
                 ItemStack currentStack = slot < currentInputs.length ? currentInputs[slot] : null;
                 if (currentInputMatchesRecipeSlot(currentStack, recipeInputs[slot], variants)) {
-                    variants = new ArrayList<>(variants);
+                    variants = new ArrayList<>();
                     addUniqueVariant(variants, withDisplayAmount(currentStack, getEditableAmount(recipeInputs[slot])));
                 }
             }

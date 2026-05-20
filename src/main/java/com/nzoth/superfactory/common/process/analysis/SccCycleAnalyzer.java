@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import net.minecraft.item.ItemStack;
+
 import com.nzoth.superfactory.common.process.ProcessEdge;
 import com.nzoth.superfactory.common.process.ProcessGraph;
 import com.nzoth.superfactory.common.process.ProcessNode;
@@ -155,24 +157,21 @@ final class SccCycleAnalyzer {
             return;
         }
         Integer targetNodeId = targetNodeIds.get(0);
-        Set<MaterialKey> targetOutputs = targetOutputsByNode.getOrDefault(targetNodeId, Collections.emptySet());
-        if (!targetOutputs.contains(cycle.cycleMaterial)
-            || !outputsByNode.getOrDefault(targetNodeId, Collections.emptySet())
-                .contains(cycle.cycleMaterial)) {
-            validation.error(
-                "TARGET_CYCLE_TARGET_NOT_OUTPUT",
-                "目标环 " + cycle.cycleId + " 的目标节点必须产出循环物料: node=" + targetNodeId + ", material=" + cycle.cycleMaterial);
-        }
         ProcessNode targetNode = nodesById.get(targetNodeId);
-        if (ProcessGraphAnalyzer.producedRate(targetNode, cycle.cycleMaterial)
-            <= ProcessGraphAnalyzer.consumedRate(targetNode, cycle.cycleMaterial)) {
+        double producedRate = ProcessGraphAnalyzer.producedRate(targetNode, cycle.cycleMaterial);
+        double consumedRate = ProcessGraphAnalyzer.consumedRate(targetNode, cycle.cycleMaterial);
+        if (producedRate <= consumedRate) {
             validation.error(
                 "TARGET_CYCLE_TARGET_NON_POSITIVE_NET",
                 "目标环 " + cycle.cycleId
                     + " 的目标节点必须正净产出循环物料: node="
-                    + targetNodeId
+                    + describeNode(targetNode)
                     + ", material="
-                    + cycle.cycleMaterial);
+                    + describeMaterial(component, nodesById, cycle.cycleMaterial)
+                    + ", producedRate="
+                    + producedRate
+                    + ", consumedRate="
+                    + consumedRate);
         }
         if (targetCycleMaterialHasExternalConsumer(
             component,
@@ -183,8 +182,59 @@ final class SccCycleAnalyzer {
             cycle.cycleMaterial)) {
             validation.error(
                 "TARGET_CYCLE_EXTERNAL_CONSUMER",
-                "目标环 " + cycle.cycleId + " 的循环物料不能被环外节点消耗: material=" + cycle.cycleMaterial);
+                "目标环 " + cycle.cycleId
+                    + " 的循环物料不能被环外节点消耗: material="
+                    + describeMaterial(component, nodesById, cycle.cycleMaterial));
         }
+    }
+
+    private static String describeNode(ProcessNode node) {
+        if (node == null) {
+            return "?";
+        }
+        String name = node.name == null || node.name.trim()
+            .isEmpty() ? "节点" + node.id : node.name.trim();
+        return name + "#" + node.id;
+    }
+
+    private static String describeMaterial(List<Integer> component, Map<Integer, ProcessNode> nodesById,
+        MaterialKey material) {
+        String displayName = findMaterialDisplayName(component, nodesById, material);
+        return displayName == null ? String.valueOf(material) : displayName + " (" + material + ")";
+    }
+
+    private static String findMaterialDisplayName(List<Integer> component, Map<Integer, ProcessNode> nodesById,
+        MaterialKey material) {
+        if (material == null) {
+            return null;
+        }
+        for (Integer nodeId : component) {
+            ProcessNode node = nodesById.get(nodeId);
+            String name = findMaterialDisplayName(node, material, true);
+            if (name != null) {
+                return name;
+            }
+            name = findMaterialDisplayName(node, material, false);
+            if (name != null) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    private static String findMaterialDisplayName(ProcessNode node, MaterialKey material, boolean outputs) {
+        if (node == null) {
+            return null;
+        }
+        int slots = outputs ? node.outputHandler.getSlots() : node.inputHandler.getSlots();
+        for (int slot = 0; slot < slots; slot++) {
+            ItemStack stack = outputs ? node.outputHandler.getStackInSlot(slot)
+                : node.inputHandler.getStackInSlot(slot);
+            if (stack != null && material.equals(ProcessGraphAnalyzer.keyOf(stack))) {
+                return stack.getDisplayName();
+            }
+        }
+        return null;
     }
 
     private static boolean targetCycleMaterialHasExternalConsumer(List<Integer> component,

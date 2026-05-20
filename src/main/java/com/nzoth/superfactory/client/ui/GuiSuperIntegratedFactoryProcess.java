@@ -4078,6 +4078,8 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         private boolean ok = true;
         private String message = "";
         private final Map<Integer, Integer> parallelByNode = new LinkedHashMap<>();
+        private final Map<Integer, Integer> cycleScaleById = new LinkedHashMap<>();
+        private final Map<Integer, Double> cycleDemandById = new LinkedHashMap<>();
         private boolean byproductOverflowExpected;
 
         private static TargetBalanceResult error(String message) {
@@ -4220,11 +4222,13 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             showError(result.message);
             return;
         }
-        if (hasAnyCycle(result.nodes)) {
-            showError(tr("superfactory.machine.super_integrated_factory.process.error.target_balance_cycle"));
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        TargetBalanceResult cycleValidation = validateTargetBalanceCycles(analysis, result.nodes, result.endNodes);
+        if (!cycleValidation.ok) {
+            showError(cycleValidation.message);
             return;
         }
-        TargetBalanceResult balanceResult = propagateAcyclicTargetBalance(result.nodes, result.endNodes);
+        TargetBalanceResult balanceResult = propagateTargetBalance(result.nodes, result.endNodes, analysis);
         if (!balanceResult.ok) {
             showError(balanceResult.message);
             return;
@@ -4462,18 +4466,46 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return false;
     }
 
-    private TargetBalanceResult propagateAcyclicTargetBalance(List<ProcessNode> relevantNodes,
-        List<ProcessNode> targetNodes) {
+    private TargetBalanceResult validateTargetBalanceCycles(GraphAnalysisResult analysis,
+        List<ProcessNode> relevantNodes, List<ProcessNode> targetNodes) {
+        if (analysis == null || analysis.cycles.isEmpty()) {
+            return new TargetBalanceResult();
+        }
+        Set<Integer> relevantIds = nodeIdSet(relevantNodes);
+        Set<Integer> targetIds = nodeIdSet(targetNodes);
+        for (CycleInfo cycle : analysis.cycles) {
+            if (!cycleTouches(cycle, relevantIds)) {
+                continue;
+            }
+            if (!cycle.validSingleMaterialCycle || !cycle.positiveNetOutput || cycle.cycleMaterial == null) {
+                return TargetBalanceResult
+                    .error(tr("superfactory.machine.super_integrated_factory.process.error.target_balance_bad_cycle"));
+            }
+            List<Integer> cycleTargets = targetIdsInCycle(cycle, targetIds);
+            if (cycleTargets.isEmpty()) {
+                continue;
+            }
+            if (cycleTargets.size() > 1) {
+                return TargetBalanceResult.error(
+                    tr("superfactory.machine.super_integrated_factory.process.error.target_balance_target_cycle"));
+            }
+            ProcessNode target = graph.findNode(cycleTargets.get(0));
+            if (!nodeProducesMaterial(target, cycle.cycleMaterial) || nodeConsumesMaterial(target, cycle.cycleMaterial)
+                || cycleMaterialHasExternalConsumer(cycle, cycle.cycleMaterial)) {
+                return TargetBalanceResult.error(
+                    tr("superfactory.machine.super_integrated_factory.process.error.target_balance_target_cycle"));
+            }
+        }
+        return new TargetBalanceResult();
+    }
+
+    private TargetBalanceResult propagateTargetBalance(List<ProcessNode> relevantNodes, List<ProcessNode> targetNodes,
+        GraphAnalysisResult analysis) {
         Set<Integer> relevantIds = nodeIdSet(relevantNodes);
         Set<Integer> targetIds = nodeIdSet(targetNodes);
         if (targetDownstreamReachesAnotherTarget(targetNodes, targetIds, relevantIds)) {
             return TargetBalanceResult
                 .error(tr("superfactory.machine.super_integrated_factory.process.error.target_balance_cross_target"));
-        }
-        List<ProcessNode> topo = topologicalOrder(relevantNodes, relevantIds);
-        if (topo.size() != relevantNodes.size()) {
-            return TargetBalanceResult
-                .error(tr("superfactory.machine.super_integrated_factory.process.error.target_balance_cycle"));
         }
 
         TargetBalanceResult result = new TargetBalanceResult();
@@ -4507,6 +4539,23 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             int startIndex = processedDemandIndex.getOrDefault(consumer.id, 0);
             for (int demandIndex = startIndex; demandIndex < demands.size(); demandIndex++) {
                 RateDemand demand = demands.get(demandIndex);
+                if (handleNormalCycleSupplierDemand(
+                    consumer,
+                    demand,
+                    relevantIds,
+                    targetIds,
+                    byproductNodes,
+                    inputDemands,
+                    demandQueue,
+                    queuedDemandNodes,
+                    trunkEdges,
+                    result,
+                    analysis)) {
+                    if (!result.ok) {
+                        return result;
+                    }
+                    continue;
+                }
                 List<ProducerMatch> producers = matchingIncomingProducers(consumer, demand.stack, relevantIds);
                 if (producers.isEmpty()) {
                     continue;
@@ -4548,6 +4597,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     private void propagateAcyclicByproductBalance(List<ProcessNode> relevantNodes, Set<Integer> relevantIds,
         Set<Integer> targetIds, Map<String, Boolean> trunkEdges, Map<Integer, Boolean> byproductNodes,
         Map<Integer, List<RateDemand>> inputDemands, TargetBalanceResult result) {
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
         Set<Integer> trunkNodeIds = trunkNodeIds(trunkEdges, targetIds);
         ArrayDeque<Integer> demandQueue = new ArrayDeque<>();
         Set<Integer> queuedDemandNodes = new HashSet<>();
@@ -4561,6 +4611,9 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             for (int outputSlot = 0; outputSlot < producer.outputHandler.getSlots(); outputSlot++) {
                 ItemStack output = producer.outputHandler.getStackInSlot(outputSlot);
                 if (output == null) {
+                    continue;
+                }
+                if (isNormalCycleMaterialOutput(producer, output, analysis, targetIds)) {
                     continue;
                 }
                 double outputRate = outputRatePerParallel(producer, outputSlot) * producerParallel;
@@ -4614,6 +4667,9 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                     if (output == null) {
                         continue;
                     }
+                    if (isNormalCycleMaterialOutput(raisedConsumer, output, analysis, targetIds)) {
+                        continue;
+                    }
                     double outputRate = outputRatePerParallel(raisedConsumer, outputSlot) * parallel;
                     if (outputRate > 0.0D) {
                         byproductQueue.add(new ByproductDemand(raisedConsumer.id, output, outputRate));
@@ -4654,43 +4710,6 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
         }
         return false;
-    }
-
-    private List<ProcessNode> topologicalOrder(List<ProcessNode> relevantNodes, Set<Integer> relevantIds) {
-        Map<Integer, Integer> indegree = new LinkedHashMap<>();
-        for (ProcessNode node : relevantNodes) {
-            indegree.put(node.id, 0);
-        }
-        for (ProcessEdge edge : graph.edges) {
-            if (relevantIds.contains(edge.fromNodeId) && relevantIds.contains(edge.toNodeId)) {
-                indegree.put(edge.toNodeId, indegree.getOrDefault(edge.toNodeId, 0) + 1);
-            }
-        }
-        ArrayDeque<ProcessNode> queue = new ArrayDeque<>();
-        for (ProcessNode node : relevantNodes) {
-            if (indegree.getOrDefault(node.id, 0) == 0) {
-                queue.add(node);
-            }
-        }
-        List<ProcessNode> ordered = new ArrayList<>();
-        while (!queue.isEmpty()) {
-            ProcessNode node = queue.removeFirst();
-            ordered.add(node);
-            for (ProcessEdge edge : graph.edges) {
-                if (edge.fromNodeId != node.id || !relevantIds.contains(edge.toNodeId)) {
-                    continue;
-                }
-                int nextIndegree = indegree.get(edge.toNodeId) - 1;
-                indegree.put(edge.toNodeId, nextIndegree);
-                if (nextIndegree == 0) {
-                    ProcessNode next = graph.findNode(edge.toNodeId);
-                    if (next != null) {
-                        queue.add(next);
-                    }
-                }
-            }
-        }
-        return ordered;
     }
 
     private void addNodeInputDemands(Map<Integer, List<RateDemand>> inputDemands, ProcessNode node, int parallel) {
@@ -4738,8 +4757,26 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             return;
         }
         int startIndex = processedDemandIndex.getOrDefault(consumer.id, 0);
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
         for (int demandIndex = startIndex; demandIndex < demands.size(); demandIndex++) {
             RateDemand demand = demands.get(demandIndex);
+            if (handleNormalCycleSupplierDemand(
+                consumer,
+                demand,
+                relevantIds,
+                targetIds,
+                byproductNodes,
+                inputDemands,
+                demandQueue,
+                queuedDemandNodes,
+                trunkEdges,
+                result,
+                analysis)) {
+                if (!result.ok) {
+                    return;
+                }
+                continue;
+            }
             List<ProducerMatch> producers = matchingIncomingProducers(consumer, demand.stack, relevantIds);
             if (producers.isEmpty()) {
                 continue;
@@ -4796,6 +4833,114 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
         }
         return producers;
+    }
+
+    private boolean handleNormalCycleSupplierDemand(ProcessNode consumer, RateDemand demand, Set<Integer> relevantIds,
+        Set<Integer> targetIds, Map<Integer, Boolean> byproductNodes, Map<Integer, List<RateDemand>> inputDemands,
+        ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes, Map<String, Boolean> trunkEdges,
+        TargetBalanceResult result, GraphAnalysisResult analysis) {
+        if (consumer == null || demand == null || demand.stack == null || analysis == null) {
+            return false;
+        }
+        MaterialKey demandKey = materialKeyOf(demand.stack);
+        if (demandKey == null) {
+            return false;
+        }
+        Map<Integer, Double> supplierUnitRates = new LinkedHashMap<>();
+        Map<Integer, CycleInfo> suppliersByCycleId = new LinkedHashMap<>();
+        for (ProcessEdge edge : graph.edges) {
+            if (edge.toNodeId != consumer.id || !relevantIds.contains(edge.fromNodeId)) {
+                continue;
+            }
+            CycleInfo cycle = analysis.cycleByNodeId.get(edge.fromNodeId);
+            if (!isNormalSupplierCycle(cycle, targetIds) || !demandKey.equals(cycle.cycleMaterial)) {
+                continue;
+            }
+            ProcessNode producer = graph.findNode(edge.fromNodeId);
+            if (producer == null || !edgeCanCarryMaterial(edge, producer, consumer, cycle.cycleMaterial)) {
+                continue;
+            }
+            supplierUnitRates
+                .put(cycle.cycleId, Math.max(supplierUnitRates.getOrDefault(cycle.cycleId, 0.0D), cycle.netRate));
+            suppliersByCycleId.put(cycle.cycleId, cycle);
+            if (!byproductNodes.containsKey(consumer.id)) {
+                trunkEdges.put(edgeKey(edge.fromNodeId, consumer.id), Boolean.TRUE);
+            }
+        }
+        if (supplierUnitRates.isEmpty()) {
+            return false;
+        }
+        double totalUnitRate = 0.0D;
+        for (double unitRate : supplierUnitRates.values()) {
+            totalUnitRate += unitRate;
+        }
+        if (totalUnitRate <= 0.0D) {
+            result.ok = false;
+            result.message = tr("superfactory.machine.super_integrated_factory.process.error.target_balance_failed");
+            return true;
+        }
+        for (Map.Entry<Integer, Double> entry : supplierUnitRates.entrySet()) {
+            CycleInfo cycle = suppliersByCycleId.get(entry.getKey());
+            double share = demand.rate * entry.getValue() / totalUnitRate;
+            raiseNormalCycleSupplier(cycle, share, inputDemands, demandQueue, queuedDemandNodes, result);
+        }
+        return true;
+    }
+
+    private void raiseNormalCycleSupplier(CycleInfo cycle, double demandedRate,
+        Map<Integer, List<RateDemand>> inputDemands, ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes,
+        TargetBalanceResult result) {
+        if (cycle == null || demandedRate <= 0.0D || cycle.netRate <= 0.0D) {
+            return;
+        }
+        double totalDemand = result.cycleDemandById.getOrDefault(cycle.cycleId, 0.0D) + demandedRate;
+        result.cycleDemandById.put(cycle.cycleId, totalDemand);
+        int oldScale = result.cycleScaleById.getOrDefault(cycle.cycleId, 0);
+        int newScale = ceilParallel(totalDemand, cycle.netRate);
+        if (newScale <= oldScale) {
+            return;
+        }
+        result.cycleScaleById.put(cycle.cycleId, newScale);
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode node = graph.findNode(nodeId);
+            if (node == null || node.isRecyclerNode()) {
+                continue;
+            }
+            int baseParallel = Math.max(1, node.parallelLimit);
+            int oldParallel = safeScaleParallel(baseParallel, oldScale);
+            int newParallel = safeScaleParallel(baseParallel, newScale);
+            raiseRecommendedParallel(result.parallelByNode, node, newParallel);
+            int delta = Math.max(0, newParallel - oldParallel);
+            if (delta > 0) {
+                addNodeInputDemandsExceptMaterial(inputDemands, node, delta, cycle.cycleMaterial);
+                enqueueDemandNode(demandQueue, queuedDemandNodes, node.id);
+            }
+        }
+    }
+
+    private int safeScaleParallel(int baseParallel, int scale) {
+        if (scale <= 0) {
+            return 0;
+        }
+        if (baseParallel > Integer.MAX_VALUE / scale) {
+            return Integer.MAX_VALUE;
+        }
+        return Math.max(1, baseParallel * scale);
+    }
+
+    private void addNodeInputDemandsExceptMaterial(Map<Integer, List<RateDemand>> inputDemands, ProcessNode node,
+        int parallel, MaterialKey excludedMaterial) {
+        if (node == null || node.isRecyclerNode() || parallel <= 0) {
+            return;
+        }
+        double duration = Math.max(1, node.durationTicks);
+        for (int inputSlot = 0; inputSlot < node.inputHandler.getSlots(); inputSlot++) {
+            ItemStack input = node.inputHandler.getStackInSlot(inputSlot);
+            MaterialKey inputKey = materialKeyOf(input);
+            if (input != null && (excludedMaterial == null || !excludedMaterial.equals(inputKey))) {
+                addRateDemand(inputDemands, node, input, getEditableAmount(input) * parallel / duration);
+            }
+        }
     }
 
     private double totalProducerUnitRate(List<ProducerMatch> producers) {
@@ -4878,7 +5023,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (outputRate <= 0.0D || output == null || !result.ok) {
             return raisedConsumers;
         }
-        List<ProcessNode> consumers = matchingNonTrunkConsumers(producerId, output, relevantIds, trunkEdges);
+        List<ProcessNode> consumers = matchingNonTrunkConsumers(producerId, output, relevantIds, targetIds, trunkEdges);
         if (consumers.isEmpty()) {
             result.byproductOverflowExpected = true;
             return raisedConsumers;
@@ -4912,11 +5057,15 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private List<ProcessNode> matchingNonTrunkConsumers(int producerId, ItemStack output, Set<Integer> relevantIds,
-        Map<String, Boolean> trunkEdges) {
+        Set<Integer> targetIds, Map<String, Boolean> trunkEdges) {
         List<ProcessNode> consumers = new ArrayList<>();
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
         for (ProcessEdge edge : graph.edges) {
             if (edge.fromNodeId != producerId || !relevantIds.contains(edge.toNodeId)
                 || trunkEdges.containsKey(edgeKey(edge.fromNodeId, edge.toNodeId))) {
+                continue;
+            }
+            if (isNormalCycleInternalEdge(edge.fromNodeId, edge.toNodeId, analysis, targetIds)) {
                 continue;
             }
             ProcessNode consumer = graph.findNode(edge.toNodeId);
@@ -4925,6 +5074,104 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
         }
         return consumers;
+    }
+
+    private boolean cycleTouches(CycleInfo cycle, Set<Integer> relevantIds) {
+        for (Integer nodeId : cycle.nodeIds) {
+            if (relevantIds.contains(nodeId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<Integer> targetIdsInCycle(CycleInfo cycle, Set<Integer> targetIds) {
+        List<Integer> result = new ArrayList<>();
+        for (Integer nodeId : cycle.nodeIds) {
+            if (targetIds.contains(nodeId)) {
+                result.add(nodeId);
+            }
+        }
+        return result;
+    }
+
+    private boolean isNormalSupplierCycle(CycleInfo cycle, Set<Integer> targetIds) {
+        return cycle != null && cycle.validSingleMaterialCycle
+            && cycle.positiveNetOutput
+            && cycle.cycleMaterial != null
+            && targetIdsInCycle(cycle, targetIds).isEmpty();
+    }
+
+    private boolean nodeProducesMaterial(ProcessNode node, MaterialKey material) {
+        if (node == null || material == null) {
+            return false;
+        }
+        for (int outputSlot = 0; outputSlot < node.outputHandler.getSlots(); outputSlot++) {
+            if (material.equals(materialKeyOf(node.outputHandler.getStackInSlot(outputSlot)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean nodeConsumesMaterial(ProcessNode node, MaterialKey material) {
+        if (node == null || material == null) {
+            return false;
+        }
+        for (int inputSlot = 0; inputSlot < node.inputHandler.getSlots(); inputSlot++) {
+            if (material.equals(materialKeyOf(node.inputHandler.getStackInSlot(inputSlot)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean cycleMaterialHasExternalConsumer(CycleInfo cycle, MaterialKey material) {
+        Set<Integer> cycleNodeIds = new HashSet<>(cycle.nodeIds);
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode producer = graph.findNode(nodeId);
+            if (producer == null || !nodeProducesMaterial(producer, material)) {
+                continue;
+            }
+            for (ProcessEdge edge : graph.edges) {
+                if (edge.fromNodeId != nodeId || cycleNodeIds.contains(edge.toNodeId)) {
+                    continue;
+                }
+                ProcessNode consumer = graph.findNode(edge.toNodeId);
+                if (consumer != null && edgeCanCarryMaterial(edge, producer, consumer, material)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean edgeCanCarryMaterial(ProcessEdge edge, ProcessNode producer, ProcessNode consumer,
+        MaterialKey material) {
+        MaterialKey edgeMaterial = MaterialKey.parse(edge.resourceKey);
+        if (edgeMaterial != null) {
+            return edgeMaterial.equals(material);
+        }
+        return nodeProducesMaterial(producer, material) && nodeConsumesMaterial(consumer, material);
+    }
+
+    private boolean isNormalCycleInternalEdge(int fromNodeId, int toNodeId, GraphAnalysisResult analysis,
+        Set<Integer> targetIds) {
+        if (analysis == null) {
+            return false;
+        }
+        CycleInfo fromCycle = analysis.cycleByNodeId.get(fromNodeId);
+        CycleInfo toCycle = analysis.cycleByNodeId.get(toNodeId);
+        return fromCycle != null && fromCycle == toCycle && isNormalSupplierCycle(fromCycle, targetIds);
+    }
+
+    private boolean isNormalCycleMaterialOutput(ProcessNode producer, ItemStack output, GraphAnalysisResult analysis,
+        Set<Integer> targetIds) {
+        if (producer == null || output == null || analysis == null) {
+            return false;
+        }
+        CycleInfo cycle = analysis.cycleByNodeId.get(producer.id);
+        return isNormalSupplierCycle(cycle, targetIds) && cycle.cycleMaterial.equals(materialKeyOf(output));
     }
 
     private double totalConsumerUnitRate(List<ProcessNode> consumers, ItemStack output) {

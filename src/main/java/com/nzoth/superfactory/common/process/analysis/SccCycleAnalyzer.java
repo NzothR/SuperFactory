@@ -117,10 +117,98 @@ final class SccCycleAnalyzer {
                 "CYCLE_NON_POSITIVE_NET",
                 "环 " + cycleId + " 循环物料没有正净输出: material=" + cycle.cycleMaterial + ", net=" + cycle.netRate);
         }
+        validateTargetCycle(
+            cycle,
+            component,
+            nodesById,
+            outputsByNode,
+            inputsByNode,
+            targetOutputsByNode,
+            relationIndex,
+            validation);
         if (!cycle.hasStartupPath && cycle.requiredStartupMaterials.isEmpty()) {
             validation.warning("CYCLE_STARTUP_UNKNOWN", "环 " + cycleId + " 未能推断启动路径。");
         }
         return cycle;
+    }
+
+    private static void validateTargetCycle(CycleInfo cycle, List<Integer> component,
+        Map<Integer, ProcessNode> nodesById, Map<Integer, Set<MaterialKey>> outputsByNode,
+        Map<Integer, Set<MaterialKey>> inputsByNode, Map<Integer, Set<MaterialKey>> targetOutputsByNode,
+        NodeRelationIndex relationIndex, GraphValidationResult validation) {
+        List<Integer> targetNodeIds = new ArrayList<>();
+        for (Integer nodeId : component) {
+            if (!targetOutputsByNode.getOrDefault(nodeId, Collections.emptySet())
+                .isEmpty()) {
+                targetNodeIds.add(nodeId);
+            }
+        }
+        if (targetNodeIds.isEmpty()) {
+            return;
+        }
+        if (targetNodeIds.size() != 1) {
+            validation
+                .error("TARGET_CYCLE_MULTIPLE_TARGETS", "目标环 " + cycle.cycleId + " 只能包含一个目标节点: nodes=" + targetNodeIds);
+            return;
+        }
+        if (!cycle.validSingleMaterialCycle || cycle.cycleMaterial == null) {
+            return;
+        }
+        Integer targetNodeId = targetNodeIds.get(0);
+        Set<MaterialKey> targetOutputs = targetOutputsByNode.getOrDefault(targetNodeId, Collections.emptySet());
+        if (!targetOutputs.contains(cycle.cycleMaterial)
+            || !outputsByNode.getOrDefault(targetNodeId, Collections.emptySet())
+                .contains(cycle.cycleMaterial)) {
+            validation.error(
+                "TARGET_CYCLE_TARGET_NOT_OUTPUT",
+                "目标环 " + cycle.cycleId + " 的目标节点必须产出循环物料: node=" + targetNodeId + ", material=" + cycle.cycleMaterial);
+        }
+        if (inputsByNode.getOrDefault(targetNodeId, Collections.emptySet())
+            .contains(cycle.cycleMaterial)) {
+            validation.error(
+                "TARGET_CYCLE_TARGET_CONSUMES_MATERIAL",
+                "目标环 " + cycle.cycleId + " 的目标节点不能消耗循环物料: node=" + targetNodeId + ", material=" + cycle.cycleMaterial);
+        }
+        if (targetCycleMaterialHasExternalConsumer(
+            component,
+            nodesById,
+            outputsByNode,
+            inputsByNode,
+            relationIndex,
+            cycle.cycleMaterial)) {
+            validation.error(
+                "TARGET_CYCLE_EXTERNAL_CONSUMER",
+                "目标环 " + cycle.cycleId + " 的循环物料不能被环外节点消耗: material=" + cycle.cycleMaterial);
+        }
+    }
+
+    private static boolean targetCycleMaterialHasExternalConsumer(List<Integer> component,
+        Map<Integer, ProcessNode> nodesById, Map<Integer, Set<MaterialKey>> outputsByNode,
+        Map<Integer, Set<MaterialKey>> inputsByNode, NodeRelationIndex relationIndex, MaterialKey material) {
+        Set<Integer> componentSet = new HashSet<>(component);
+        for (Integer nodeId : component) {
+            if (!outputsByNode.getOrDefault(nodeId, Collections.emptySet())
+                .contains(material)) {
+                continue;
+            }
+            ProcessNode from = nodesById.get(nodeId);
+            for (ProcessEdge edge : relationIndex.outgoingEdgesByNode.getOrDefault(nodeId, Collections.emptyList())) {
+                if (componentSet.contains(edge.toNodeId)) {
+                    continue;
+                }
+                ProcessNode to = nodesById.get(edge.toNodeId);
+                if (ProcessGraphAnalyzer.edgeCarriesMaterial(
+                    edge,
+                    from,
+                    to,
+                    material,
+                    outputsByNode.getOrDefault(edge.fromNodeId, Collections.emptySet()),
+                    inputsByNode.getOrDefault(edge.toNodeId, Collections.emptySet()))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static List<CycleMaterialInfo> selectCycleMaterials(List<Integer> component, List<CycleMaterialInfo> infos,

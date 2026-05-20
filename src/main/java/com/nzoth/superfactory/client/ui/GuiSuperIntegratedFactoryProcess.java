@@ -42,6 +42,7 @@ import com.nzoth.superfactory.common.process.ProcessNode;
 import com.nzoth.superfactory.common.process.ProcessRequirements;
 import com.nzoth.superfactory.common.process.analysis.CycleInfo;
 import com.nzoth.superfactory.common.process.analysis.GraphAnalysisResult;
+import com.nzoth.superfactory.common.process.analysis.GraphValidationError;
 import com.nzoth.superfactory.common.process.analysis.ProcessGraphAnalyzer;
 import com.nzoth.superfactory.common.process.key.MaterialKey;
 
@@ -4360,12 +4361,27 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (!result.ok) {
             return result;
         }
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        if (analysis.validation.hasErrors()) {
+            return ProcessBuildResult.error(firstGraphValidationErrorMessage(analysis));
+        }
         result.requirements = collectProcessRequirements(result.nodes);
         if (requireRequirements && result.requirements.isEmpty()) {
             return ProcessBuildResult
                 .error(tr("superfactory.machine.super_integrated_factory.process.error.no_requirements"));
         }
         return result;
+    }
+
+    private String firstGraphValidationErrorMessage(GraphAnalysisResult analysis) {
+        if (analysis != null) {
+            for (GraphValidationError entry : analysis.validation.entries()) {
+                if (entry.severity == GraphValidationError.Severity.ERROR) {
+                    return entry.message;
+                }
+            }
+        }
+        return tr("superfactory.machine.super_integrated_factory.process.error.target_balance_cycle");
     }
 
     private ProcessBuildResult validateProcessGraph() {
@@ -4490,7 +4506,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                     tr("superfactory.machine.super_integrated_factory.process.error.target_balance_target_cycle"));
             }
             ProcessNode target = graph.findNode(cycleTargets.get(0));
-            if (!nodeProducesMaterial(target, cycle.cycleMaterial) || nodeConsumesMaterial(target, cycle.cycleMaterial)
+            if (!nodeNetProducesMaterial(target, cycle.cycleMaterial)
                 || cycleMaterialHasExternalConsumer(cycle, cycle.cycleMaterial)) {
                 return TargetBalanceResult.error(
                     tr("superfactory.machine.super_integrated_factory.process.error.target_balance_target_cycle"));
@@ -5124,6 +5140,39 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
         }
         return false;
+    }
+
+    private boolean nodeNetProducesMaterial(ProcessNode node, MaterialKey material) {
+        return nodeMaterialProducedRate(node, material) > nodeMaterialConsumedRate(node, material);
+    }
+
+    private double nodeMaterialProducedRate(ProcessNode node, MaterialKey material) {
+        if (node == null || material == null) {
+            return 0.0D;
+        }
+        double rate = 0.0D;
+        for (int outputSlot = 0; outputSlot < node.outputHandler.getSlots(); outputSlot++) {
+            if (material.equals(materialKeyOf(node.outputHandler.getStackInSlot(outputSlot)))) {
+                rate += outputRatePerParallel(node, outputSlot) * Math.max(1, node.parallelLimit);
+            }
+        }
+        return rate;
+    }
+
+    private double nodeMaterialConsumedRate(ProcessNode node, MaterialKey material) {
+        if (node == null || material == null || node.isRecyclerNode()) {
+            return 0.0D;
+        }
+        double rate = 0.0D;
+        double duration = Math.max(1, node.durationTicks);
+        int parallel = Math.max(1, node.parallelLimit);
+        for (int inputSlot = 0; inputSlot < node.inputHandler.getSlots(); inputSlot++) {
+            ItemStack input = node.inputHandler.getStackInSlot(inputSlot);
+            if (material.equals(materialKeyOf(input))) {
+                rate += getEditableAmount(input) * parallel / duration;
+            }
+        }
+        return rate;
     }
 
     private boolean cycleMaterialHasExternalConsumer(CycleInfo cycle, MaterialKey material) {

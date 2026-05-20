@@ -163,11 +163,16 @@ final class SccCycleAnalyzer {
                 "TARGET_CYCLE_TARGET_NOT_OUTPUT",
                 "目标环 " + cycle.cycleId + " 的目标节点必须产出循环物料: node=" + targetNodeId + ", material=" + cycle.cycleMaterial);
         }
-        if (inputsByNode.getOrDefault(targetNodeId, Collections.emptySet())
-            .contains(cycle.cycleMaterial)) {
+        ProcessNode targetNode = nodesById.get(targetNodeId);
+        if (ProcessGraphAnalyzer.producedRate(targetNode, cycle.cycleMaterial)
+            <= ProcessGraphAnalyzer.consumedRate(targetNode, cycle.cycleMaterial)) {
             validation.error(
-                "TARGET_CYCLE_TARGET_CONSUMES_MATERIAL",
-                "目标环 " + cycle.cycleId + " 的目标节点不能消耗循环物料: node=" + targetNodeId + ", material=" + cycle.cycleMaterial);
+                "TARGET_CYCLE_TARGET_NON_POSITIVE_NET",
+                "目标环 " + cycle.cycleId
+                    + " 的目标节点必须正净产出循环物料: node="
+                    + targetNodeId
+                    + ", material="
+                    + cycle.cycleMaterial);
         }
         if (targetCycleMaterialHasExternalConsumer(
             component,

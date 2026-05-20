@@ -1477,6 +1477,14 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         return canOutputAll(itemOutputs, null);
     }
 
+    private boolean canRouteItems(ItemStack[] itemOutputs) {
+        return canRouteOutputs(itemOutputs, null);
+    }
+
+    private boolean canRouteOutputs(ItemStack[] itemOutputs, FluidStack[] fluidOutputs) {
+        return canOutputSafely(createItemRouteProbe(itemOutputs), createFluidRouteProbe(fluidOutputs));
+    }
+
     private boolean canOutputSafely(ItemStack[] itemOutputs, FluidStack[] fluidOutputs) {
         boolean fastItemOutput = itemOutputs == null || hasFastItemOutputBus();
         boolean fastFluidOutput = fluidOutputs == null || hasFastFluidOutputHatch();
@@ -1490,6 +1498,38 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             return canOutputAll(itemOutputs, null);
         }
         return canOutputAll(itemOutputs, fluidOutputs);
+    }
+
+    private ItemStack[] createItemRouteProbe(ItemStack[] itemOutputs) {
+        if (itemOutputs == null || itemOutputs.length == 0) {
+            return null;
+        }
+        ArrayList<ItemStack> probes = new ArrayList<>();
+        for (ItemStack output : itemOutputs) {
+            if (output == null || output.stackSize <= 0) {
+                continue;
+            }
+            ItemStack probe = output.copy();
+            probe.stackSize = 1;
+            probes.add(probe);
+        }
+        return probes.isEmpty() ? null : probes.toArray(new ItemStack[0]);
+    }
+
+    private FluidStack[] createFluidRouteProbe(FluidStack[] fluidOutputs) {
+        if (fluidOutputs == null || fluidOutputs.length == 0) {
+            return null;
+        }
+        ArrayList<FluidStack> probes = new ArrayList<>();
+        for (FluidStack output : fluidOutputs) {
+            if (output == null || output.amount <= 0) {
+                continue;
+            }
+            FluidStack probe = output.copy();
+            probe.amount = 1;
+            probes.add(probe);
+        }
+        return probes.isEmpty() ? null : probes.toArray(new FluidStack[0]);
     }
 
     private void consumeRealInputs(GTRecipe recipe, int parallel, ItemStack[] itemInputs, FluidStack[] fluidInputs) {
@@ -2192,8 +2232,8 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         if (!canSupplyExecutionPlan(plan)) {
             return CheckRecipeResultRegistry.insufficientPower(plan.euPerTick);
         }
-        if (!canOutputSafely(plan.outputItems, plan.outputFluids)) {
-            return plan.outputItems != null && plan.outputItems.length > 0 && !canOutputItemsSafely(plan.outputItems)
+        if (!canRouteOutputs(plan.outputItems, plan.outputFluids)) {
+            return plan.outputItems != null && plan.outputItems.length > 0 && !canRouteItems(plan.outputItems)
                 ? CheckRecipeResultRegistry.ITEM_OUTPUT_FULL
                 : CheckRecipeResultRegistry.FLUID_OUTPUT_FULL;
         }
@@ -2832,34 +2872,9 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         if (recipe == null || requestedParallel <= 0) {
             return 0;
         }
-        boolean fastItemOutput = hasFastItemOutputBus();
-        boolean fastFluidOutput = hasFastFluidOutputHatch();
-        if (fastItemOutput && fastFluidOutput) {
-            return requestedParallel;
-        }
-        long allowed = requestedParallel;
-        int[] probes = new int[] { requestedParallel, Math.max(1, requestedParallel / 2),
-            Math.max(1, requestedParallel / 4), Math.max(1, requestedParallel / 8), Math.max(1, requestedParallel / 16),
-            Math.max(1, requestedParallel / 32), Math.max(1, requestedParallel / 64) };
-        for (int probe : probes) {
-            if (probe <= 0) {
-                continue;
-            }
-            ItemStack[] items = fastItemOutput ? null
-                : transformItems(ProxyRecipeExecutor.buildRawItemOutputs(recipe, probe));
-            FluidStack[] fluids = fastFluidOutput ? null
-                : transformFluids(ProxyRecipeExecutor.buildRawFluidOutputs(recipe, probe));
-            if (!canOutputSafely(items, fluids)) {
-                continue;
-            }
-            allowed = Math.min(allowed, probe);
-        }
-        if (allowed > 1 && !canOutputSafely(
-            fastItemOutput ? null : transformItems(ProxyRecipeExecutor.buildRawItemOutputs(recipe, 1)),
-            fastFluidOutput ? null : transformFluids(ProxyRecipeExecutor.buildRawFluidOutputs(recipe, 1)))) {
-            return 0;
-        }
-        return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, allowed));
+        ItemStack[] items = transformItems(ProxyRecipeExecutor.buildRawItemOutputs(recipe, 1));
+        FluidStack[] fluids = transformFluids(ProxyRecipeExecutor.buildRawFluidOutputs(recipe, 1));
+        return canRouteOutputs(items, fluids) ? requestedParallel : 0;
     }
 
     private boolean canSupplyExecutionPlan(ProxyRecipeExecutionPlan plan) {

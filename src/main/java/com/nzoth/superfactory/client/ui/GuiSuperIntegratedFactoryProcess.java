@@ -2340,6 +2340,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             applyRecipeCandidateForCheck(exactCandidates.get(0), fillOutputs);
             return;
         }
+        RecipeMatchCandidate equivalentExactCandidate = selectEquivalentExactCandidate(editingNode, exactCandidates);
+        if (equivalentExactCandidate != null) {
+            applyRecipeCandidateForCheck(equivalentExactCandidate, fillOutputs);
+            return;
+        }
         if (candidates.size() == 1) {
             applyRecipeCandidateForCheck(candidates.get(0), fillOutputs);
             return;
@@ -2719,6 +2724,87 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                     gatherItemStacks(node.nonConsumableHandler),
                     recipeNonConsumableStacks(recipe).toArray(new ItemStack[0]),
                     true));
+    }
+
+    private RecipeMatchCandidate selectEquivalentExactCandidate(ProcessNode node,
+        List<RecipeMatchCandidate> exactCandidates) {
+        if (node == null || exactCandidates == null || exactCandidates.size() <= 1) {
+            return null;
+        }
+        String signature = recipeEquivalenceSignature(exactCandidates.get(0));
+        for (RecipeMatchCandidate candidate : exactCandidates) {
+            if (!signature.equals(recipeEquivalenceSignature(candidate))) {
+                return null;
+            }
+        }
+        RecipeMatchCandidate concreteMatch = selectConcreteInputMatch(node, exactCandidates);
+        return concreteMatch == null ? exactCandidates.get(0) : concreteMatch;
+    }
+
+    private String recipeEquivalenceSignature(RecipeMatchCandidate candidate) {
+        if (candidate == null) {
+            return "";
+        }
+        return candidate.recipeMap.unlocalizedName + "|i="
+            + groupedItemKey(recipeConsumableInputs(candidate.recipe))
+            + "|fi="
+            + groupedFluidKey(candidate.fluidInputs)
+            + "|o="
+            + groupedItemKey(candidate.itemOutputs)
+            + "|oc="
+            + groupedOutputChanceKey(candidate.itemOutputs, candidate.outputChances)
+            + "|fo="
+            + groupedFluidKey(candidate.fluidOutputs)
+            + "|nc="
+            + groupedItemKey(recipeNonConsumableStacks(candidate.recipe).toArray(new ItemStack[0]))
+            + "|t="
+            + candidate.durationTicks
+            + "|e="
+            + candidate.euPerTick;
+    }
+
+    private RecipeMatchCandidate selectConcreteInputMatch(ProcessNode node, List<RecipeMatchCandidate> candidates) {
+        ItemStack[] provided = gatherInputItemStacks(node);
+        if (provided.length == 0) {
+            return null;
+        }
+        for (RecipeMatchCandidate candidate : candidates) {
+            if (concreteInputsMatchRecipe(provided, recipeConsumableInputs(candidate.recipe))) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private boolean concreteInputsMatchRecipe(ItemStack[] provided, ItemStack[] recipeInputs) {
+        List<ItemStack> remaining = new ArrayList<>();
+        for (ItemStack stack : safeItems(recipeInputs)) {
+            if (stack != null) {
+                remaining.add(stack);
+            }
+        }
+        for (ItemStack stack : safeItems(provided)) {
+            if (stack == null) {
+                continue;
+            }
+            int matchedIndex = findConcreteRecipeInputIndex(remaining, stack);
+            if (matchedIndex < 0) {
+                return false;
+            }
+            remaining.remove(matchedIndex);
+        }
+        return remaining.isEmpty();
+    }
+
+    private int findConcreteRecipeInputIndex(List<ItemStack> remaining, ItemStack provided) {
+        for (int i = 0; i < remaining.size(); i++) {
+            ItemStack recipeStack = remaining.get(i);
+            if (recipeStack != null && getDisplayAmount(recipeStack) == getDisplayAmount(provided)
+                && GTUtility.areStacksEqual(recipeStack, provided, true)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private boolean hasAnyProvidedHints(ProcessNode node) {

@@ -2347,6 +2347,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             applyRecipeCandidateForCheck(equivalentExactCandidate, fillOutputs);
             return;
         }
+        RecipeMatchCandidate equivalentLooseCandidate = selectEquivalentLooseCandidate(editingNode, candidates);
+        if (equivalentLooseCandidate != null) {
+            applyRecipeCandidateForCheck(equivalentLooseCandidate, fillOutputs);
+            return;
+        }
         if (candidates.size() == 1) {
             applyRecipeCandidateForCheck(candidates.get(0), fillOutputs);
             return;
@@ -2379,9 +2384,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             showError(tr("superfactory.machine.super_integrated_factory.process.error.no_recipe_outputs"));
             return false;
         }
-        boolean shouldFillOutputs = fillOutputs
-            || !hasProvidedOutputs(editingNode) && !hasProvidedOutputFluids(editingNode);
-        applyRecipeCandidate(candidate, shouldFillOutputs);
+        if (fillOutputs) {
+            applyRecipeCandidate(candidate, true);
+        } else {
+            applyRecipeCandidateForCheckOnly(candidate);
+        }
         return true;
     }
 
@@ -2733,6 +2740,22 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return concreteMatch == null ? exactCandidates.get(0) : concreteMatch;
     }
 
+    private RecipeMatchCandidate selectEquivalentLooseCandidate(ProcessNode node,
+        List<RecipeMatchCandidate> candidates) {
+        if (node == null || candidates == null || candidates.size() <= 1) {
+            return null;
+        }
+        String signature = recipeEquivalenceSignature(candidates.get(0));
+        for (RecipeMatchCandidate candidate : candidates) {
+            String candidateSignature = recipeEquivalenceSignature(candidate);
+            if (!signature.equals(candidateSignature)) {
+                return null;
+            }
+        }
+        RecipeMatchCandidate looseConcreteMatch = selectLooseConcreteInputMatch(node, candidates);
+        return looseConcreteMatch == null ? candidates.get(0) : looseConcreteMatch;
+    }
+
     private String recipeEquivalenceSignature(RecipeMatchCandidate candidate) {
         if (candidate == null) {
             return "";
@@ -2887,6 +2910,20 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return null;
     }
 
+    private RecipeMatchCandidate selectLooseConcreteInputMatch(ProcessNode node,
+        List<RecipeMatchCandidate> candidates) {
+        ItemStack[] provided = gatherInputItemStacks(node);
+        if (provided.length == 0) {
+            return null;
+        }
+        for (RecipeMatchCandidate candidate : candidates) {
+            if (inputStacksMatchCandidate(provided, candidate, false)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
     private boolean hasAnyProvidedHints(ProcessNode node) {
         return hasProvidedInputs(node) || hasProvidedInputFluids(node)
             || hasProvidedOutputs(node)
@@ -2949,6 +2986,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private boolean inputStacksMatchCandidate(ItemStack[] provided, RecipeMatchCandidate candidate) {
+        return inputStacksMatchCandidate(provided, candidate, true);
+    }
+
+    private boolean inputStacksMatchCandidate(ItemStack[] provided, RecipeMatchCandidate candidate,
+        boolean exactAmount) {
         List<List<ItemStack>> remaining = new ArrayList<>();
         ItemStack[] recipeInputs = recipeConsumableInputs(candidate.recipe);
         for (int slot = 0; slot < recipeInputs.length; slot++) {
@@ -2970,7 +3012,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 continue;
             }
             providedCount++;
-            int matchedIndex = findMatchingCandidateInputSlot(remaining, stack);
+            int matchedIndex = findMatchingCandidateInputSlot(remaining, stack, exactAmount);
             if (matchedIndex < 0) {
                 return false;
             }
@@ -2979,10 +3021,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return providedCount == recipeInputs.length && remaining.isEmpty();
     }
 
-    private int findMatchingCandidateInputSlot(List<List<ItemStack>> remaining, ItemStack provided) {
+    private int findMatchingCandidateInputSlot(List<List<ItemStack>> remaining, ItemStack provided,
+        boolean exactAmount) {
         for (int i = 0; i < remaining.size(); i++) {
             for (ItemStack variant : remaining.get(i)) {
-                if (variant != null && getDisplayAmount(variant) == getDisplayAmount(provided)
+                if (variant != null && (!exactAmount || getDisplayAmount(variant) == getDisplayAmount(provided))
                     && recipeInputAcceptsProvided(variant, provided)) {
                     return i;
                 }
@@ -3115,7 +3158,35 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         setEditorFieldsEnabled(!editingNode.locked);
     }
 
+    private void applyRecipeCandidateForCheckOnly(RecipeMatchCandidate candidate) {
+        if (editingNode == null) {
+            return;
+        }
+        applyRecipeCandidateState(candidate, true, true);
+        normalizeExistingOutputs(candidate);
+        applyOutputChances(editingNode.outputHandler, candidate, editingNode);
+        if (!recipeNonConsumableStacks(candidate.recipe).isEmpty() || !hasProvidedNonConsumables(editingNode)) {
+            fillHandlerFromNonConsumables(editingNode.nonConsumableHandler, candidate.recipe);
+        }
+        editingNode.recipeMapName = candidate.recipeMap.unlocalizedName;
+        editingNode.recipeHandlerName = StatCollector.translateToLocal(candidate.recipeMap.unlocalizedName);
+        editingNode.fakeRecipeSnapshot = false;
+        editingNode.virtualRecipeSnapshot = null;
+        applyRecipeTiming(candidate);
+        editingNode.recipeFingerprint = editingNode.buildRecipeFingerprint();
+        editingNode.lastRecipeCheckPassed = true;
+        fillEmptyNameFromRecipeOutput();
+        writeEstimatedOutputs(java.util.Collections.singletonList(editingNode));
+        rebuildEditorFields(editingNode);
+        setEditorFieldsEnabled(!editingNode.locked);
+    }
+
     private void applyRecipeCandidateState(RecipeMatchCandidate candidate, boolean fillMissingInputs) {
+        applyRecipeCandidateState(candidate, fillMissingInputs, false);
+    }
+
+    private void applyRecipeCandidateState(RecipeMatchCandidate candidate, boolean fillMissingInputs,
+        boolean preserveProvidedInputs) {
         if (editingNode == null || candidate == null) {
             return;
         }
@@ -3129,12 +3200,19 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             List<ItemStack> variants = editingNode.hasInputVariants(slot) ? editingNode.getInputVariants(slot)
                 : slot < candidate.inputVariants.size() ? candidate.inputVariants.get(slot)
                     : java.util.Collections.emptyList();
+            if (preserveProvidedInputs) {
+                ItemStack currentStack = slot < currentInputs.length ? currentInputs[slot] : null;
+                if (currentInputMatchesRecipeSlot(currentStack, recipeInputs[slot], variants)) {
+                    variants = new ArrayList<>(variants);
+                    addUniqueVariant(variants, withDisplayAmount(currentStack, getEditableAmount(recipeInputs[slot])));
+                }
+            }
             preferredVariantsBySlot.add(variants);
         }
         if (fillMissingInputs || hasProvidedInputs(editingNode) || hasProvidedInputFluids(editingNode)) {
             fillHandlerFromRecipe(
                 editingNode.inputHandler,
-                selectDisplayedInputStacks(recipeInputs, currentInputs, preferredVariantsBySlot)
+                selectDisplayedInputStacks(recipeInputs, currentInputs, preferredVariantsBySlot, preserveProvidedInputs)
                     .toArray(new ItemStack[0]),
                 candidate.fluidInputs);
         }
@@ -3207,12 +3285,21 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
 
     private List<ItemStack> selectDisplayedInputStacks(ItemStack[] recipeInputs, ItemStack[] currentInputs,
         List<List<ItemStack>> preferredVariantsBySlot) {
+        return selectDisplayedInputStacks(recipeInputs, currentInputs, preferredVariantsBySlot, false);
+    }
+
+    private List<ItemStack> selectDisplayedInputStacks(ItemStack[] recipeInputs, ItemStack[] currentInputs,
+        List<List<ItemStack>> preferredVariantsBySlot, boolean preserveProvidedInputs) {
         List<ItemStack> stacks = new ArrayList<>();
         for (int slot = 0; slot < recipeInputs.length; slot++) {
             ItemStack recipeStack = recipeInputs[slot] == null ? null : recipeInputs[slot].copy();
             List<ItemStack> variants = slot < preferredVariantsBySlot.size() ? preferredVariantsBySlot.get(slot)
                 : java.util.Collections.emptyList();
             ItemStack currentStack = slot < currentInputs.length ? currentInputs[slot] : null;
+            if (preserveProvidedInputs && currentInputMatchesRecipeSlot(currentStack, recipeStack, variants)) {
+                stacks.add(withDisplayAmount(currentStack, getEditableAmount(recipeStack)));
+                continue;
+            }
             if (!variants.isEmpty()) {
                 int selectedIndex = selectedVariantIndex(variants, currentStack);
                 ItemStack selected = variants.get(selectedIndex);
@@ -3222,6 +3309,24 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
         }
         return stacks;
+    }
+
+    private boolean currentInputMatchesRecipeSlot(ItemStack currentStack, ItemStack recipeStack,
+        List<ItemStack> variants) {
+        if (currentStack == null || recipeStack == null) {
+            return false;
+        }
+        if (recipeInputAcceptsProvided(recipeStack, currentStack)) {
+            return true;
+        }
+        if (variants != null) {
+            for (ItemStack variant : variants) {
+                if (recipeInputAcceptsProvided(variant, currentStack)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void markRecipeCandidateMatched(RecipeMatchCandidate candidate) {

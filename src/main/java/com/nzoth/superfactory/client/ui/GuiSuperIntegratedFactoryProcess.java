@@ -4060,6 +4060,19 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         }
     }
 
+    private static final class ByproductDemand {
+
+        private final int producerId;
+        private final ItemStack output;
+        private final double rate;
+
+        private ByproductDemand(int producerId, ItemStack output, double rate) {
+            this.producerId = producerId;
+            this.output = output == null ? null : output.copy();
+            this.rate = rate;
+        }
+    }
+
     private static final class TargetBalanceResult {
 
         private boolean ok = true;
@@ -4466,6 +4479,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         TargetBalanceResult result = new TargetBalanceResult();
         Map<Integer, List<RateDemand>> inputDemands = new LinkedHashMap<>();
         Map<String, Boolean> trunkEdges = new LinkedHashMap<>();
+        Map<Integer, Boolean> byproductNodes = new LinkedHashMap<>();
         for (ProcessNode node : relevantNodes) {
             int initialParallel = targetIds.contains(node.id) ? Math.max(1, node.parallelLimit) : 0;
             result.parallelByNode.put(node.id, node.isRecyclerNode() ? Integer.MAX_VALUE : initialParallel);
@@ -4508,7 +4522,8 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                     int requiredParallel = ceilParallel(share, producer.unitRate);
                     raiseRecommendedParallel(result.parallelByNode, producer.node, requiredParallel);
                     int newParallel = currentRecommendedParallel(result.parallelByNode, producer.node);
-                    if (!targetIds.contains(producer.node.id) && !producer.node.isRecyclerNode()
+                    if (!byproductNodes.containsKey(producer.node.id) && !targetIds.contains(producer.node.id)
+                        && !producer.node.isRecyclerNode()
                         && newParallel > oldParallel) {
                         addNodeInputDemands(inputDemands, producer.node, newParallel - oldParallel);
                         enqueueDemandNode(demandQueue, queuedDemandNodes, producer.node.id);
@@ -4519,14 +4534,25 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             processedDemandIndex.put(consumer.id, demands.size());
         }
 
-        propagateAcyclicByproductBalance(relevantNodes, relevantIds, targetIds, topo, trunkEdges, inputDemands, result);
+        propagateAcyclicByproductBalance(
+            relevantNodes,
+            relevantIds,
+            targetIds,
+            trunkEdges,
+            byproductNodes,
+            inputDemands,
+            result);
         return result;
     }
 
     private void propagateAcyclicByproductBalance(List<ProcessNode> relevantNodes, Set<Integer> relevantIds,
-        Set<Integer> targetIds, List<ProcessNode> topo, Map<String, Boolean> trunkEdges,
+        Set<Integer> targetIds, Map<String, Boolean> trunkEdges, Map<Integer, Boolean> byproductNodes,
         Map<Integer, List<RateDemand>> inputDemands, TargetBalanceResult result) {
         Set<Integer> trunkNodeIds = trunkNodeIds(trunkEdges, targetIds);
+        ArrayDeque<Integer> demandQueue = new ArrayDeque<>();
+        Set<Integer> queuedDemandNodes = new HashSet<>();
+        Map<Integer, Integer> processedDemandIndex = new LinkedHashMap<>();
+        ArrayDeque<ByproductDemand> byproductQueue = new ArrayDeque<>();
         for (ProcessNode producer : relevantNodes) {
             if (!trunkNodeIds.contains(producer.id) || producer.isRecyclerNode()) {
                 continue;
@@ -4541,54 +4567,58 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 if (outputRate <= 0.0D) {
                     continue;
                 }
-                addByproductDemands(
-                    producer.id,
-                    output,
-                    outputRate,
-                    relevantIds,
-                    targetIds,
-                    trunkEdges,
-                    inputDemands,
-                    result);
+                byproductQueue.add(new ByproductDemand(producer.id, output, outputRate));
             }
         }
 
-        for (ProcessNode node : topo) {
-            if (trunkNodeIds.contains(node.id) || targetIds.contains(node.id)) {
-                continue;
-            }
-            List<RateDemand> demands = inputDemands.get(node.id);
-            if (demands == null || demands.isEmpty()) {
-                continue;
-            }
-            if (node.isRecyclerNode()) {
-                result.parallelByNode.put(node.id, Integer.MAX_VALUE);
-                continue;
-            }
-            int required = result.parallelByNode.getOrDefault(node.id, 1);
-            for (RateDemand demand : demands) {
-                double unitRate = consumerInputUnitRate(node, demand.stack);
-                if (unitRate > 0.0D) {
-                    required = Math.max(required, ceilParallel(demand.rate, unitRate));
-                }
-            }
-            raiseRecommendedParallel(result.parallelByNode, node, required);
-            int parallel = result.parallelByNode.get(node.id);
-            for (int outputSlot = 0; outputSlot < node.outputHandler.getSlots(); outputSlot++) {
-                ItemStack output = node.outputHandler.getStackInSlot(outputSlot);
-                if (output == null) {
+        while (result.ok && (!demandQueue.isEmpty() || !byproductQueue.isEmpty())) {
+            while (result.ok && !demandQueue.isEmpty()) {
+                int consumerId = demandQueue.removeFirst();
+                queuedDemandNodes.remove(consumerId);
+                ProcessNode consumer = graph.findNode(consumerId);
+                if (consumer == null) {
                     continue;
                 }
-                double outputRate = outputRatePerParallel(node, outputSlot) * parallel;
-                addByproductDemands(
-                    node.id,
-                    output,
-                    outputRate,
+                processTargetBalanceInputDemands(
+                    consumer,
                     relevantIds,
                     targetIds,
-                    trunkEdges,
+                    byproductNodes,
                     inputDemands,
+                    demandQueue,
+                    queuedDemandNodes,
+                    processedDemandIndex,
+                    trunkEdges,
                     result);
+            }
+            if (!result.ok || byproductQueue.isEmpty()) {
+                continue;
+            }
+            ByproductDemand byproductDemand = byproductQueue.removeFirst();
+            List<ProcessNode> raisedConsumers = addByproductDemands(
+                byproductDemand.producerId,
+                byproductDemand.output,
+                byproductDemand.rate,
+                relevantIds,
+                targetIds,
+                trunkEdges,
+                byproductNodes,
+                inputDemands,
+                demandQueue,
+                queuedDemandNodes,
+                result);
+            for (ProcessNode raisedConsumer : raisedConsumers) {
+                int parallel = currentRecommendedParallel(result.parallelByNode, raisedConsumer);
+                for (int outputSlot = 0; outputSlot < raisedConsumer.outputHandler.getSlots(); outputSlot++) {
+                    ItemStack output = raisedConsumer.outputHandler.getStackInSlot(outputSlot);
+                    if (output == null) {
+                        continue;
+                    }
+                    double outputRate = outputRatePerParallel(raisedConsumer, outputSlot) * parallel;
+                    if (outputRate > 0.0D) {
+                        byproductQueue.add(new ByproductDemand(raisedConsumer.id, output, outputRate));
+                    }
+                }
             }
         }
     }
@@ -4667,10 +4697,18 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (node == null || node.isRecyclerNode() || parallel <= 0) {
             return;
         }
+        addNodeInputDemandsExcept(inputDemands, node, parallel, null);
+    }
+
+    private void addNodeInputDemandsExcept(Map<Integer, List<RateDemand>> inputDemands, ProcessNode node, int parallel,
+        ItemStack excludedInput) {
+        if (node == null || node.isRecyclerNode() || parallel <= 0) {
+            return;
+        }
         double duration = Math.max(1, node.durationTicks);
         for (int inputSlot = 0; inputSlot < node.inputHandler.getSlots(); inputSlot++) {
             ItemStack input = node.inputHandler.getStackInSlot(inputSlot);
-            if (input != null) {
+            if (input != null && (excludedInput == null || !inputAcceptsOutput(input, excludedInput))) {
                 addRateDemand(inputDemands, node, input, getEditableAmount(input) * parallel / duration);
             }
         }
@@ -4689,6 +4727,48 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         }
         inputDemands.computeIfAbsent(node.id, ignored -> new ArrayList<>())
             .add(new RateDemand(stack, rate));
+    }
+
+    private void processTargetBalanceInputDemands(ProcessNode consumer, Set<Integer> relevantIds,
+        Set<Integer> targetIds, Map<Integer, Boolean> byproductNodes, Map<Integer, List<RateDemand>> inputDemands,
+        ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes, Map<Integer, Integer> processedDemandIndex,
+        Map<String, Boolean> trunkEdges, TargetBalanceResult result) {
+        List<RateDemand> demands = inputDemands.get(consumer.id);
+        if (demands == null || demands.isEmpty()) {
+            return;
+        }
+        int startIndex = processedDemandIndex.getOrDefault(consumer.id, 0);
+        for (int demandIndex = startIndex; demandIndex < demands.size(); demandIndex++) {
+            RateDemand demand = demands.get(demandIndex);
+            List<ProducerMatch> producers = matchingIncomingProducers(consumer, demand.stack, relevantIds);
+            if (producers.isEmpty()) {
+                continue;
+            }
+            double totalUnitRate = totalProducerUnitRate(producers);
+            if (totalUnitRate <= 0.0D) {
+                result.ok = false;
+                result.message = tr(
+                    "superfactory.machine.super_integrated_factory.process.error.target_balance_failed");
+                return;
+            }
+            for (ProducerMatch producer : producers) {
+                double share = demand.rate * producer.unitRate / totalUnitRate;
+                int oldParallel = currentRecommendedParallel(result.parallelByNode, producer.node);
+                int requiredParallel = ceilParallel(share, producer.unitRate);
+                raiseRecommendedParallel(result.parallelByNode, producer.node, requiredParallel);
+                int newParallel = currentRecommendedParallel(result.parallelByNode, producer.node);
+                if (!byproductNodes.containsKey(producer.node.id) && !targetIds.contains(producer.node.id)
+                    && !producer.node.isRecyclerNode()
+                    && newParallel > oldParallel) {
+                    addNodeInputDemands(inputDemands, producer.node, newParallel - oldParallel);
+                    enqueueDemandNode(demandQueue, queuedDemandNodes, producer.node.id);
+                }
+                if (!byproductNodes.containsKey(consumer.id)) {
+                    trunkEdges.put(edgeKey(producer.node.id, consumer.id), Boolean.TRUE);
+                }
+            }
+        }
+        processedDemandIndex.put(consumer.id, demands.size());
     }
 
     private List<ProducerMatch> matchingIncomingProducers(ProcessNode consumer, ItemStack demandStack,
@@ -4790,33 +4870,45 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return fromNodeId + "->" + toNodeId;
     }
 
-    private void addByproductDemands(int producerId, ItemStack output, double outputRate, Set<Integer> relevantIds,
-        Set<Integer> targetIds, Map<String, Boolean> trunkEdges, Map<Integer, List<RateDemand>> inputDemands,
-        TargetBalanceResult result) {
+    private List<ProcessNode> addByproductDemands(int producerId, ItemStack output, double outputRate,
+        Set<Integer> relevantIds, Set<Integer> targetIds, Map<String, Boolean> trunkEdges,
+        Map<Integer, Boolean> byproductNodes, Map<Integer, List<RateDemand>> inputDemands,
+        ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes, TargetBalanceResult result) {
+        List<ProcessNode> raisedConsumers = new ArrayList<>();
         if (outputRate <= 0.0D || output == null || !result.ok) {
-            return;
+            return raisedConsumers;
         }
         List<ProcessNode> consumers = matchingNonTrunkConsumers(producerId, output, relevantIds, trunkEdges);
         if (consumers.isEmpty()) {
             result.byproductOverflowExpected = true;
-            return;
+            return raisedConsumers;
         }
         double totalUnitRate = totalConsumerUnitRate(consumers, output);
         if (totalUnitRate <= 0.0D) {
             result.byproductOverflowExpected = true;
-            return;
+            return raisedConsumers;
         }
         for (ProcessNode consumer : consumers) {
             if (targetIds.contains(consumer.id)) {
                 result.ok = false;
                 result.message = tr(
                     "superfactory.machine.super_integrated_factory.process.error.target_balance_cross_target");
-                return;
+                return raisedConsumers;
             }
             ItemStack inputTemplate = matchingConsumerInputTemplate(consumer, output);
             double share = outputRate * consumerInputUnitRate(consumer, output) / totalUnitRate;
-            addRateDemand(inputDemands, consumer, inputTemplate, share);
+            byproductNodes.put(consumer.id, Boolean.TRUE);
+            int oldParallel = currentRecommendedParallel(result.parallelByNode, consumer);
+            int requiredParallel = ceilParallel(share, consumerInputUnitRate(consumer, output));
+            raiseRecommendedParallel(result.parallelByNode, consumer, requiredParallel);
+            int newParallel = currentRecommendedParallel(result.parallelByNode, consumer);
+            if (!consumer.isRecyclerNode() && newParallel > oldParallel) {
+                addNodeInputDemandsExcept(inputDemands, consumer, newParallel - oldParallel, inputTemplate);
+                enqueueDemandNode(demandQueue, queuedDemandNodes, consumer.id);
+                raisedConsumers.add(consumer);
+            }
         }
+        return raisedConsumers;
     }
 
     private List<ProcessNode> matchingNonTrunkConsumers(int producerId, ItemStack output, Set<Integer> relevantIds,

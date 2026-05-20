@@ -4219,7 +4219,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         for (ProcessNode node : result.nodes) {
             Integer parallel = balanceResult.parallelByNode.get(node.id);
             if (parallel != null) {
-                node.parallelLimit = parallel;
+                node.parallelLimit = node.isRecyclerNode() ? Integer.MAX_VALUE : Math.max(1, parallel);
             }
             writeEstimatedOutputs(java.util.Collections.singletonList(node));
         }
@@ -4467,21 +4467,32 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         Map<Integer, List<RateDemand>> inputDemands = new LinkedHashMap<>();
         Map<String, Boolean> trunkEdges = new LinkedHashMap<>();
         for (ProcessNode node : relevantNodes) {
-            int initialParallel = targetIds.contains(node.id) ? Math.max(1, node.parallelLimit) : 1;
+            int initialParallel = targetIds.contains(node.id) ? Math.max(1, node.parallelLimit) : 0;
             result.parallelByNode.put(node.id, node.isRecyclerNode() ? Integer.MAX_VALUE : initialParallel);
             node.estimatedOutputLine = "";
         }
+        ArrayDeque<Integer> demandQueue = new ArrayDeque<>();
+        Set<Integer> queuedDemandNodes = new HashSet<>();
+        Map<Integer, Integer> processedDemandIndex = new LinkedHashMap<>();
         for (ProcessNode target : targetNodes) {
             addNodeInputDemands(inputDemands, target, Math.max(1, target.parallelLimit));
+            enqueueDemandNode(demandQueue, queuedDemandNodes, target.id);
         }
 
-        for (int i = topo.size() - 1; i >= 0; i--) {
-            ProcessNode consumer = topo.get(i);
+        while (!demandQueue.isEmpty()) {
+            int consumerId = demandQueue.removeFirst();
+            queuedDemandNodes.remove(consumerId);
+            ProcessNode consumer = graph.findNode(consumerId);
+            if (consumer == null) {
+                continue;
+            }
             List<RateDemand> demands = inputDemands.get(consumer.id);
             if (demands == null || demands.isEmpty()) {
                 continue;
             }
-            for (RateDemand demand : demands) {
+            int startIndex = processedDemandIndex.getOrDefault(consumer.id, 0);
+            for (int demandIndex = startIndex; demandIndex < demands.size(); demandIndex++) {
+                RateDemand demand = demands.get(demandIndex);
                 List<ProducerMatch> producers = matchingIncomingProducers(consumer, demand.stack, relevantIds);
                 if (producers.isEmpty()) {
                     continue;
@@ -4493,16 +4504,19 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 }
                 for (ProducerMatch producer : producers) {
                     double share = demand.rate * producer.unitRate / totalUnitRate;
-                    raiseRecommendedParallel(
-                        result.parallelByNode,
-                        producer.node,
-                        ceilParallel(share, producer.unitRate));
+                    int oldParallel = currentRecommendedParallel(result.parallelByNode, producer.node);
+                    int requiredParallel = ceilParallel(share, producer.unitRate);
+                    raiseRecommendedParallel(result.parallelByNode, producer.node, requiredParallel);
+                    int newParallel = currentRecommendedParallel(result.parallelByNode, producer.node);
+                    if (!targetIds.contains(producer.node.id) && !producer.node.isRecyclerNode()
+                        && newParallel > oldParallel) {
+                        addNodeInputDemands(inputDemands, producer.node, newParallel - oldParallel);
+                        enqueueDemandNode(demandQueue, queuedDemandNodes, producer.node.id);
+                    }
                     trunkEdges.put(edgeKey(producer.node.id, consumer.id), Boolean.TRUE);
                 }
             }
-            if (!targetIds.contains(consumer.id) && !consumer.isRecyclerNode()) {
-                addNodeInputDemands(inputDemands, consumer, result.parallelByNode.get(consumer.id));
-            }
+            processedDemandIndex.put(consumer.id, demands.size());
         }
 
         propagateAcyclicByproductBalance(relevantNodes, relevantIds, targetIds, topo, trunkEdges, inputDemands, result);
@@ -4662,6 +4676,12 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         }
     }
 
+    private void enqueueDemandNode(ArrayDeque<Integer> demandQueue, Set<Integer> queuedDemandNodes, int nodeId) {
+        if (queuedDemandNodes.add(nodeId)) {
+            demandQueue.add(nodeId);
+        }
+    }
+
     private void addRateDemand(Map<Integer, List<RateDemand>> inputDemands, ProcessNode node, ItemStack stack,
         double rate) {
         if (node == null || stack == null || rate <= 0.0D) {
@@ -4715,6 +4735,13 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             return;
         }
         parallelByNode.put(node.id, Math.max(parallelByNode.getOrDefault(node.id, 1), Math.max(1, required)));
+    }
+
+    private int currentRecommendedParallel(Map<Integer, Integer> parallelByNode, ProcessNode node) {
+        if (node == null) {
+            return 0;
+        }
+        return Math.max(0, parallelByNode.getOrDefault(node.id, 0));
     }
 
     private int ceilParallel(double requiredRate, double unitRate) {

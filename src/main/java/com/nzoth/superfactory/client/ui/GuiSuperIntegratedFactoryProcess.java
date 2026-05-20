@@ -4228,7 +4228,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void balanceProcess() {
-        ProcessBuildResult result = validateProcessGraph();
+        ProcessBuildResult result = validateLockedTargetProcessGraph();
         if (!result.ok) {
             showError(result.message);
             return;
@@ -4244,7 +4244,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void targetBalanceProcess() {
-        ProcessBuildResult result = validateProcessGraph();
+        ProcessBuildResult result = validateLockedTargetProcessGraph();
         if (!result.ok) {
             showError(result.message);
             return;
@@ -4369,7 +4369,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private void exportRawMaterials() {
-        ProcessBuildResult result = validateProcessGraph();
+        ProcessBuildResult result = validateLockedTargetProcessGraph();
         if (!result.ok) {
             showError(result.message);
             return;
@@ -4384,7 +4384,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private ProcessBuildResult buildProcessSubmission(boolean requireRequirements) {
-        ProcessBuildResult result = validateProcessGraph();
+        ProcessBuildResult result = validateLockedTargetProcessGraph();
         if (!result.ok) {
             return result;
         }
@@ -4412,11 +4412,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     private GraphAnalysisResult analyzeAndBackfillCycleMaterials(List<ProcessNode> relevantNodes) {
-        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        GraphAnalysisResult analysis = analyzeRelevantGraph(relevantNodes);
         Set<Integer> relevantIds = nodeIdSet(relevantNodes);
         boolean changed = false;
         for (CycleInfo cycle : analysis.cycles) {
-            if (!cycle.validSingleMaterialCycle || cycle.cycleMaterial == null || !cycleTouches(cycle, relevantIds)) {
+            if (!cycle.validSingleMaterialCycle || cycle.cycleMaterial == null || !cycleInside(cycle, relevantIds)) {
                 continue;
             }
             ProcessNode owner = cycleMaterialOwnerNode(cycle);
@@ -4435,8 +4435,37 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             cachedClientGraphAnalysis = null;
             cachedClientGraphNodeCount = -1;
             cachedClientGraphEdgeCount = -1;
+            analysis = analyzeRelevantGraph(relevantNodes);
         }
         return analysis;
+    }
+
+    private GraphAnalysisResult analyzeRelevantGraph(List<ProcessNode> relevantNodes) {
+        return new ProcessGraphAnalyzer().analyze(copyRelevantGraph(relevantNodes));
+    }
+
+    private ProcessGraph copyRelevantGraph(List<ProcessNode> relevantNodes) {
+        Set<Integer> relevantIds = nodeIdSet(relevantNodes);
+        ProcessGraph copy = new ProcessGraph();
+        copy.nextNodeId = graph.nextNodeId;
+        copy.nextEdgeId = graph.nextEdgeId;
+        copy.viewportX = graph.viewportX;
+        copy.viewportY = graph.viewportY;
+        copy.zoom = graph.zoom;
+        copy.snapToGrid = graph.snapToGrid;
+        for (ProcessNode node : graph.nodes) {
+            if (relevantIds.contains(node.id)) {
+                copy.nodes.add(ProcessNode.readFromNBT(node.writeToNBT()));
+            }
+        }
+        for (ProcessEdge edge : graph.edges) {
+            if (relevantIds.contains(edge.fromNodeId) && relevantIds.contains(edge.toNodeId)) {
+                copy.edges.add(ProcessEdge.readFromNBT(edge.writeToNBT()));
+            }
+        }
+        copy.selectedNodeId = relevantIds.contains(graph.selectedNodeId) ? graph.selectedNodeId
+            : copy.nodes.isEmpty() ? 0 : copy.nodes.get(copy.nodes.size() - 1).id;
+        return copy;
     }
 
     private ProcessNode cycleMaterialOwnerNode(CycleInfo cycle) {
@@ -4487,19 +4516,32 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return null;
     }
 
-    private ProcessBuildResult validateProcessGraph() {
-        List<ProcessNode> relevantNodes = findRelevantNodes();
+    private ProcessBuildResult validateLockedTargetProcessGraph() {
+        ProcessNode orphanLockedNode = firstLockedNodeInComponentWithoutTarget();
+        if (orphanLockedNode != null) {
+            return ProcessBuildResult.error(
+                tr("superfactory.machine.super_integrated_factory.process.error.no_end_node") + ": "
+                    + safeNodeName(orphanLockedNode));
+        }
+        List<ProcessNode> relevantNodes = findRelevantLockedNodes();
         if (relevantNodes.isEmpty()) {
+            if (hasLockedProcessNodes()) {
+                return ProcessBuildResult
+                    .error(tr("superfactory.machine.super_integrated_factory.process.error.no_end_node"));
+            }
             return ProcessBuildResult
                 .error(tr("superfactory.machine.super_integrated_factory.process.error.no_connected_process"));
         }
+        return validateProcessNodes(relevantNodes);
+    }
+
+    private ProcessBuildResult validateProcessGraph() {
+        return validateLockedTargetProcessGraph();
+    }
+
+    private ProcessBuildResult validateProcessNodes(List<ProcessNode> relevantNodes) {
         List<ProcessNode> endNodes = new ArrayList<>();
         for (ProcessNode node : relevantNodes) {
-            if (!node.locked) {
-                return ProcessBuildResult.error(
-                    tr("superfactory.machine.super_integrated_factory.process.error.node_unlocked") + ": "
-                        + safeNodeName(node));
-            }
             if (!node.lastRecipeCheckPassed) {
                 return ProcessBuildResult.error(
                     tr("superfactory.machine.super_integrated_factory.process.error.node_unchecked") + ": "
@@ -4529,60 +4571,61 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return result;
     }
 
-    private List<ProcessNode> findRelevantNodes() {
+    private List<ProcessNode> findRelevantLockedNodes() {
         List<ProcessNode> relevant = new ArrayList<>();
         for (ProcessNode node : graph.nodes) {
-            if (node.endNode) {
-                collectConnectedNodes(node.id, relevant);
+            if (node.endNode && node.locked) {
+                collectConnectedLockedNodes(node.id, relevant);
             }
         }
         return relevant;
     }
 
-    private void collectConnectedNodes(int nodeId, List<ProcessNode> relevant) {
+    private boolean hasLockedProcessNodes() {
+        for (ProcessNode node : graph.nodes) {
+            if (node.locked) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private ProcessNode firstLockedNodeInComponentWithoutTarget() {
+        Set<Integer> visited = new HashSet<>();
+        for (ProcessNode node : graph.nodes) {
+            if (!node.locked || visited.contains(node.id)) {
+                continue;
+            }
+            List<ProcessNode> component = new ArrayList<>();
+            collectConnectedLockedNodes(node.id, component);
+            boolean hasTarget = false;
+            for (ProcessNode componentNode : component) {
+                visited.add(componentNode.id);
+                if (componentNode.endNode) {
+                    hasTarget = true;
+                }
+            }
+            if (!hasTarget) {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    private void collectConnectedLockedNodes(int nodeId, List<ProcessNode> relevant) {
         ProcessNode node = graph.findNode(nodeId);
-        if (node == null || relevant.contains(node)) {
+        if (node == null || !node.locked || relevant.contains(node)) {
             return;
         }
         relevant.add(node);
         for (ProcessEdge edge : graph.edges) {
             if (edge.fromNodeId == nodeId) {
-                collectConnectedNodes(edge.toNodeId, relevant);
+                collectConnectedLockedNodes(edge.toNodeId, relevant);
             }
             if (edge.toNodeId == nodeId) {
-                collectConnectedNodes(edge.fromNodeId, relevant);
+                collectConnectedLockedNodes(edge.fromNodeId, relevant);
             }
         }
-    }
-
-    private boolean hasAnyCycle(List<ProcessNode> relevantNodes) {
-        Set<Integer> relevantIds = new HashSet<>();
-        for (ProcessNode node : relevantNodes) {
-            relevantIds.add(node.id);
-        }
-        for (ProcessNode node : relevantNodes) {
-            List<Integer> path = new ArrayList<>();
-            if (hasCycleFrom(node.id, relevantIds, path)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean hasCycleFrom(int nodeId, Set<Integer> relevantIds, List<Integer> path) {
-        int existingIndex = path.indexOf(nodeId);
-        if (existingIndex >= 0) {
-            return true;
-        }
-        path.add(nodeId);
-        for (ProcessEdge edge : graph.edges) {
-            if (edge.fromNodeId == nodeId && relevantIds.contains(edge.toNodeId)
-                && hasCycleFrom(edge.toNodeId, relevantIds, path)) {
-                return true;
-            }
-        }
-        path.remove(path.size() - 1);
-        return false;
     }
 
     private TargetBalanceResult validateTargetBalanceCycles(GraphAnalysisResult analysis,
@@ -4593,7 +4636,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         Set<Integer> relevantIds = nodeIdSet(relevantNodes);
         Set<Integer> targetIds = nodeIdSet(targetNodes);
         for (CycleInfo cycle : analysis.cycles) {
-            if (!cycleTouches(cycle, relevantIds)) {
+            if (!cycleInside(cycle, relevantIds)) {
                 continue;
             }
             if (!cycle.validSingleMaterialCycle || !cycle.positiveNetOutput || cycle.cycleMaterial == null) {
@@ -5195,13 +5238,13 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         return consumers;
     }
 
-    private boolean cycleTouches(CycleInfo cycle, Set<Integer> relevantIds) {
+    private boolean cycleInside(CycleInfo cycle, Set<Integer> relevantIds) {
         for (Integer nodeId : cycle.nodeIds) {
-            if (relevantIds.contains(nodeId)) {
-                return true;
+            if (!relevantIds.contains(nodeId)) {
+                return false;
             }
         }
-        return false;
+        return true;
     }
 
     private List<Integer> targetIdsInCycle(CycleInfo cycle, Set<Integer> targetIds) {

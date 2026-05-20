@@ -951,14 +951,22 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     public void submitProcessRequirements(NBTTagCompound requirementsTag) {
         ProcessRequirements incoming = new ProcessRequirements();
         incoming.readFromNBT(requirementsTag);
-        ProcessGraph submittedGraph = new ProcessGraph();
-        submittedGraph.readFromNBT(processGraph.writeToNBT());
+        if (hasLockedComponentWithoutTarget(processGraph)) {
+            rejectSubmittedProcessGraph(tr("superfactory.machine.super_integrated_factory.process.error.no_end_node"));
+            return;
+        }
+        ProcessGraph submittedGraph = submittedLockedTargetGraph(processGraph);
+        if (submittedGraph.nodes.isEmpty()) {
+            rejectSubmittedProcessGraph(
+                tr("superfactory.machine.super_integrated_factory.process.error.no_connected_process"));
+            return;
+        }
         GraphAnalysisResult submittedAnalysis = analyzeProcessGraph(submittedGraph, "pending-submit");
         if (submittedAnalysis.validation.hasErrors()) {
             rejectSubmittedProcessGraph(submittedAnalysis);
             return;
         }
-        submittedProcessGraphSnapshot.readFromNBT(processGraph.writeToNBT());
+        submittedProcessGraphSnapshot.readFromNBT(submittedGraph.writeToNBT());
         if (factoryMode == MODE_OUTPUT) {
             deferredProcessRequirements.readFromNBT(incoming.writeToNBT());
             deferredRuntimeGraph.readFromNBT(submittedGraph.writeToNBT());
@@ -982,12 +990,84 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             }
         }
         String message = firstError == null ? "工序图分析失败" : firstError.message;
+        rejectSubmittedProcessGraph(message);
+    }
+
+    private void rejectSubmittedProcessGraph(String message) {
         SuperFactory.LOG.warn("[Super Integrated Factory/GraphAnalysis] 拒绝提交: {}", message);
         EntityPlayer owner = findOnlineOwner(getBaseMetaTileEntity());
         if (owner != null) {
             sendProcessCanvasStatus(owner, EnumChatFormatting.RED + message, 0xFFFF7777);
         }
         getBaseMetaTileEntity().markDirty();
+    }
+
+    private ProcessGraph submittedLockedTargetGraph(ProcessGraph source) {
+        ProcessGraph result = new ProcessGraph();
+        result.nextNodeId = source.nextNodeId;
+        result.nextEdgeId = source.nextEdgeId;
+        result.viewportX = source.viewportX;
+        result.viewportY = source.viewportY;
+        result.zoom = source.zoom;
+        result.snapToGrid = source.snapToGrid;
+
+        Set<Integer> relevantIds = new HashSet<>();
+        for (ProcessNode node : source.nodes) {
+            if (node.locked && node.endNode) {
+                collectLockedConnectedNodes(source, node.id, relevantIds);
+            }
+        }
+        for (ProcessNode node : source.nodes) {
+            if (relevantIds.contains(node.id)) {
+                result.nodes.add(ProcessNode.readFromNBT(node.writeToNBT()));
+            }
+        }
+        for (ProcessEdge edge : source.edges) {
+            if (relevantIds.contains(edge.fromNodeId) && relevantIds.contains(edge.toNodeId)) {
+                result.edges.add(ProcessEdge.readFromNBT(edge.writeToNBT()));
+            }
+        }
+        result.selectedNodeId = relevantIds.contains(source.selectedNodeId) ? source.selectedNodeId
+            : result.nodes.isEmpty() ? 0 : result.nodes.get(result.nodes.size() - 1).id;
+        return result;
+    }
+
+    private boolean hasLockedComponentWithoutTarget(ProcessGraph source) {
+        Set<Integer> visited = new HashSet<>();
+        for (ProcessNode node : source.nodes) {
+            if (!node.locked || visited.contains(node.id)) {
+                continue;
+            }
+            Set<Integer> componentIds = new HashSet<>();
+            collectLockedConnectedNodes(source, node.id, componentIds);
+            boolean hasTarget = false;
+            for (Integer nodeId : componentIds) {
+                visited.add(nodeId);
+                ProcessNode componentNode = source.findNode(nodeId);
+                if (componentNode != null && componentNode.endNode) {
+                    hasTarget = true;
+                }
+            }
+            if (!hasTarget) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void collectLockedConnectedNodes(ProcessGraph source, int nodeId, Set<Integer> relevantIds) {
+        ProcessNode node = source.findNode(nodeId);
+        if (node == null || !node.locked || !relevantIds.add(nodeId)) {
+            return;
+        }
+        for (ProcessEdge edge : source.edges) {
+            if (edge.fromNodeId == nodeId) {
+                collectLockedConnectedNodes(source, edge.toNodeId, relevantIds);
+            }
+            if (edge.toNodeId == nodeId) {
+                collectLockedConnectedNodes(source, edge.fromNodeId, relevantIds);
+            }
+        }
     }
 
     private void applySubmittedProcessPlan(ProcessRequirements incoming, ProcessGraph submittedGraph,
@@ -1104,11 +1184,12 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     public void exportProcessRawMaterials(EntityPlayer player) {
+        ProcessGraph exportGraph = submittedLockedTargetGraph(processGraph);
         new RawMaterialExporter(new RawMaterialExporter.Context() {
 
             @Override
             public ProcessGraph processGraph() {
-                return processGraph;
+                return exportGraph;
             }
 
             @Override

@@ -4263,10 +4263,6 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (!result.ok) {
             return result;
         }
-        if (!refreshSubmittedNodeRecipes(result.nodes)) {
-            return ProcessBuildResult
-                .error(tr("superfactory.machine.super_integrated_factory.process.error.submitted_recipe_invalid"));
-        }
         result.requirements = collectProcessRequirements(result.nodes);
         if (requireRequirements && result.requirements.isEmpty()) {
             return ProcessBuildResult
@@ -5270,52 +5266,6 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
         }
         return null;
-    }
-
-    private boolean refreshSubmittedNodeRecipes(List<ProcessNode> nodes) {
-        ProcessNode previousEditingNode = editingNode;
-        boolean previousEditorOpen = editorOpen;
-        for (ProcessNode node : nodes) {
-            if (node.isRecyclerNode()) {
-                initializeRecyclerNode(node);
-                node.locked = true;
-                continue;
-            }
-            if (node.fakeRecipeSnapshot) {
-                editingNode = node;
-                if (!validateVirtualRecipeSnapshot(node, false)) {
-                    editingNode = previousEditingNode;
-                    editorOpen = previousEditorOpen;
-                    return false;
-                }
-                node.lastRecipeCheckPassed = true;
-                node.recipeFingerprint = node.buildRecipeFingerprint();
-                node.locked = true;
-                continue;
-            }
-            editingNode = node;
-            List<RecipeMatchCandidate> candidates = findRecipeCandidates(node);
-            RecipeMatchCandidate selected = null;
-            for (RecipeMatchCandidate candidate : candidates) {
-                if (recipeRatioMatches(node, candidate.recipeMap, candidate.recipe)) {
-                    selected = candidate;
-                    break;
-                }
-            }
-            if (selected == null && candidates.size() == 1) {
-                selected = candidates.get(0);
-            }
-            if (selected == null) {
-                editingNode = previousEditingNode;
-                editorOpen = previousEditorOpen;
-                return false;
-            }
-            applyRecipeCandidate(selected);
-            node.locked = true;
-        }
-        editingNode = previousEditingNode;
-        editorOpen = previousEditorOpen;
-        return true;
     }
 
     private void collectNodeNonConsumables(ProcessRequirements requirements, ProcessNode node) {

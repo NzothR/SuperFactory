@@ -28,6 +28,7 @@ import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
 
 import com.gtnewhorizons.modularui.api.forge.ItemStackHandler;
+import com.nzoth.superfactory.SuperFactory;
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
 import com.nzoth.superfactory.common.network.MessageExportProcessRawMaterials;
 import com.nzoth.superfactory.common.network.MessageRestoreSubmittedProcessGraph;
@@ -2336,6 +2337,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
                 exactCandidates.add(candidate);
             }
         }
+        logRecipeCheckSummary(editingNode, candidates, exactCandidates, fillOutputs, false);
         if (exactCandidates.size() == 1) {
             applyRecipeCandidateForCheck(exactCandidates.get(0), fillOutputs);
             return;
@@ -2351,9 +2353,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         }
         if (candidates.isEmpty()) {
             candidates = findRecipeCandidates(editingNode, true);
+            logRecipeCheckSummary(editingNode, candidates, java.util.Collections.emptyList(), fillOutputs, true);
         }
         editingNode.lastRecipeCheckPassed = false;
         if (candidates.size() > 1) {
+            logRecipeCandidateSelectorOpen(editingNode, candidates);
             recipeCandidates = candidates;
             candidateSelectorFillOutputs = true;
             candidateSelectorOpen = true;
@@ -2719,7 +2723,9 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         }
         String signature = recipeEquivalenceSignature(exactCandidates.get(0));
         for (RecipeMatchCandidate candidate : exactCandidates) {
-            if (!signature.equals(recipeEquivalenceSignature(candidate))) {
+            String candidateSignature = recipeEquivalenceSignature(candidate);
+            if (!signature.equals(candidateSignature)) {
+                logRecipeEquivalentCandidateRejected(node, signature, candidateSignature, exactCandidates);
                 return null;
             }
         }
@@ -2731,9 +2737,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (candidate == null) {
             return "";
         }
-        return candidate.recipeMap.unlocalizedName + "|i="
-            + groupedItemKey(recipeConsumableInputs(candidate.recipe))
-            + "|fi="
+        return candidate.recipeMap.unlocalizedName + "|fi="
             + groupedFluidKey(candidate.fluidInputs)
             + "|o="
             + groupedItemKey(candidate.itemOutputs)
@@ -2747,6 +2751,127 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             + candidate.durationTicks
             + "|e="
             + candidate.euPerTick;
+    }
+
+    private void logRecipeCheckSummary(ProcessNode node, List<RecipeMatchCandidate> candidates,
+        List<RecipeMatchCandidate> exactCandidates, boolean fillOutputs, boolean fallback) {
+        SuperFactory.LOG.info(
+            "[Super Integrated Factory/RecipeCheck] node='{}', fillOutputs={}, fallbackIgnoreHints={}, inputs={}, inputFluids={}, outputs={}, outputFluids={}, nonConsumables={}, candidates={}, exactCandidates={}",
+            safeNodeName(node),
+            fillOutputs,
+            fallback,
+            debugItemStacks(gatherInputItemStacks(node)),
+            debugFluidStacks(gatherFluidStacks(node.inputHandler)),
+            debugItemStacks(gatherItemStacks(node.outputHandler)),
+            debugFluidStacks(gatherFluidStacks(node.outputHandler)),
+            debugItemStacks(gatherItemStacks(node.nonConsumableHandler)),
+            candidates == null ? 0 : candidates.size(),
+            exactCandidates == null ? 0 : exactCandidates.size());
+        logRecipeCandidatesForDebug("candidate", candidates);
+        logRecipeCandidatesForDebug("exact", exactCandidates);
+    }
+
+    private void logRecipeCandidateSelectorOpen(ProcessNode node, List<RecipeMatchCandidate> candidates) {
+        SuperFactory.LOG.info(
+            "[Super Integrated Factory/RecipeCheck] opening candidate selector for node='{}', candidates={}",
+            safeNodeName(node),
+            candidates == null ? 0 : candidates.size());
+        logRecipeCandidatesForDebug("selector", candidates);
+    }
+
+    private void logRecipeEquivalentCandidateRejected(ProcessNode node, String expectedSignature,
+        String actualSignature, List<RecipeMatchCandidate> exactCandidates) {
+        SuperFactory.LOG.info(
+            "[Super Integrated Factory/RecipeCheck] equivalent exact candidates rejected for node='{}': expectedSignature={}, actualSignature={}",
+            safeNodeName(node),
+            expectedSignature,
+            actualSignature);
+        logRecipeCandidatesForDebug("rejectedExact", exactCandidates);
+    }
+
+    private void logRecipeCandidatesForDebug(String label, List<RecipeMatchCandidate> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < candidates.size(); i++) {
+            SuperFactory.LOG.info(
+                "[Super Integrated Factory/RecipeCheck] {}[{}] {}",
+                label,
+                i,
+                debugRecipeCandidate(candidates.get(i)));
+        }
+    }
+
+    private String debugRecipeCandidate(RecipeMatchCandidate candidate) {
+        if (candidate == null) {
+            return "<null>";
+        }
+        return "map=" + candidate.recipeMap.unlocalizedName
+            + ", ratioMatches="
+            + candidate.ratioMatches
+            + ", input="
+            + debugItemStacks(recipeConsumableInputs(candidate.recipe))
+            + ", variants="
+            + debugInputVariants(candidate.inputVariants)
+            + ", inputFluids="
+            + debugFluidStacks(candidate.fluidInputs)
+            + ", outputs="
+            + debugItemStacks(candidate.itemOutputs)
+            + ", outputFluids="
+            + debugFluidStacks(candidate.fluidOutputs)
+            + ", nc="
+            + debugItemStacks(recipeNonConsumableStacks(candidate.recipe).toArray(new ItemStack[0]))
+            + ", duration="
+            + candidate.durationTicks
+            + ", eu="
+            + candidate.euPerTick
+            + ", signature="
+            + recipeEquivalenceSignature(candidate);
+    }
+
+    private String debugInputVariants(List<List<ItemStack>> inputVariants) {
+        if (inputVariants == null || inputVariants.isEmpty()) {
+            return "[]";
+        }
+        List<String> parts = new ArrayList<>();
+        for (int i = 0; i < inputVariants.size(); i++) {
+            parts.add(
+                i + ":"
+                    + debugItemStacks(
+                        inputVariants.get(i)
+                            .toArray(new ItemStack[0])));
+        }
+        return parts.toString();
+    }
+
+    private String debugItemStacks(ItemStack[] stacks) {
+        List<String> parts = new ArrayList<>();
+        for (ItemStack stack : safeItems(stacks)) {
+            if (stack != null) {
+                parts.add(debugItemStack(stack));
+            }
+        }
+        return parts.toString();
+    }
+
+    private String debugFluidStacks(FluidStack[] fluids) {
+        List<String> parts = new ArrayList<>();
+        for (FluidStack fluid : safeFluids(fluids)) {
+            if (fluid != null && fluid.getFluid() != null) {
+                parts.add(
+                    fluid.getFluid()
+                        .getName() + "@"
+                        + Math.max(1, fluid.amount));
+            }
+        }
+        return parts.toString();
+    }
+
+    private String debugItemStack(ItemStack stack) {
+        if (stack == null) {
+            return "<null>";
+        }
+        return stack.getDisplayName() + "@" + Math.max(1L, getDisplayAmount(stack)) + "{" + itemGroupKey(stack) + "}";
     }
 
     private RecipeMatchCandidate selectConcreteInputMatch(ProcessNode node, List<RecipeMatchCandidate> candidates) {

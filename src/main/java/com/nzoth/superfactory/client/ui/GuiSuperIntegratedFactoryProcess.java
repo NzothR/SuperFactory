@@ -759,6 +759,17 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             mouseY,
             false,
             false);
+        drawPatternPreview(
+            rightX,
+            y + 190,
+            tr("superfactory.machine.super_integrated_factory.node_editor.cycle_material"),
+            editingNode.cycleMaterialHandler,
+            1,
+            1,
+            mouseX,
+            mouseY,
+            false,
+            false);
 
         int buttonY = getEditorButtonY();
         drawEditorButton(
@@ -1357,11 +1368,14 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
     }
 
     public boolean acceptDraggedStack(int mouseX, int mouseY, ItemStack draggedStack) {
-        if (!editorOpen || editingNode == null || editingNode.locked || draggedStack == null) {
+        if (!editorOpen || editingNode == null || draggedStack == null) {
             return false;
         }
         SlotHit hit = findPatternSlot(mouseX, mouseY);
         if (hit == null) {
+            return false;
+        }
+        if (editingNode.locked && hit.handler != editingNode.cycleMaterialHandler) {
             return false;
         }
         ItemStack placed = draggedStack.copy();
@@ -1372,7 +1386,10 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (hit.handler == editingNode.nonConsumableHandler && GTUtility.getFluidFromDisplayStack(placed) != null) {
             return false;
         }
-        if (containsEquivalentStack(hit.handler, placed)) {
+        if (hit.handler == editingNode.cycleMaterialHandler) {
+            placed = withDisplayAmount(placed, 1L);
+        }
+        if (hit.handler != editingNode.cycleMaterialHandler && containsEquivalentStack(hit.handler, placed)) {
             return false;
         }
         hit.handler.setStackInSlot(hit.slot, placed);
@@ -1381,7 +1398,9 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         } else if (hit.handler == editingNode.outputHandler) {
             editingNode.setOutputChance(hit.slot, 10000);
         }
-        invalidateNodeCheck();
+        if (hit.handler != editingNode.cycleMaterialHandler) {
+            invalidateNodeCheck();
+        }
         applyEditorFields();
         syncGraph();
         return true;
@@ -1506,7 +1525,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             openOreVariantSelector(hit.slot);
             return true;
         }
-        if (editingNode.locked) {
+        if (editingNode.locked && hit.handler != editingNode.cycleMaterialHandler) {
             return true;
         }
         if (mouseButton == 1) {
@@ -1516,9 +1535,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             } else if (hit.handler == editingNode.outputHandler) {
                 editingNode.setOutputChance(hit.slot, 10000);
             }
-            invalidateNodeCheck();
+            if (hit.handler != editingNode.cycleMaterialHandler) {
+                invalidateNodeCheck();
+            }
             syncGraph();
-        } else if (mouseButton == 2) {
+        } else if (mouseButton == 2 && hit.handler != editingNode.cycleMaterialHandler) {
             openAmountEditor(hit.handler, hit.slot);
         }
         return true;
@@ -1566,7 +1587,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (hit != null) {
             return hit;
         }
-        return findPatternSlot(mouseX, mouseY, rightX, y + 150, editingNode.nonConsumableHandler, 9, 9, 0);
+        hit = findPatternSlot(mouseX, mouseY, rightX, y + 150, editingNode.nonConsumableHandler, 9, 9, 0);
+        if (hit != null) {
+            return hit;
+        }
+        return findPatternSlot(mouseX, mouseY, rightX, y + 190, editingNode.cycleMaterialHandler, 1, 1, 0);
     }
 
     private SlotHit findPatternSlot(int mouseX, int mouseY, int x, int y, ItemStackHandler handler, int columns,
@@ -4208,6 +4233,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             showError(result.message);
             return;
         }
+        analyzeAndBackfillCycleMaterials(result.nodes);
         if (!propagateSimpleBalance(result.nodes)) {
             showError(tr("superfactory.machine.super_integrated_factory.process.error.balance_failed"));
             return;
@@ -4223,7 +4249,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             showError(result.message);
             return;
         }
-        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        GraphAnalysisResult analysis = analyzeAndBackfillCycleMaterials(result.nodes);
         TargetBalanceResult cycleValidation = validateTargetBalanceCycles(analysis, result.nodes, result.endNodes);
         if (!cycleValidation.ok) {
             showError(cycleValidation.message);
@@ -4303,6 +4329,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             showError(result.message);
             return;
         }
+        analyzeAndBackfillCycleMaterials(result.nodes);
         if (factory.getBaseMetaTileEntity() != null) {
             syncGraph();
             NetworkLoader.INSTANCE.sendToServer(
@@ -4361,7 +4388,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (!result.ok) {
             return result;
         }
-        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        GraphAnalysisResult analysis = analyzeAndBackfillCycleMaterials(result.nodes);
         if (analysis.validation.hasErrors()) {
             return ProcessBuildResult.error(firstGraphValidationErrorMessage(analysis));
         }
@@ -4382,6 +4409,82 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             }
         }
         return tr("superfactory.machine.super_integrated_factory.process.error.target_balance_cycle");
+    }
+
+    private GraphAnalysisResult analyzeAndBackfillCycleMaterials(List<ProcessNode> relevantNodes) {
+        GraphAnalysisResult analysis = getCachedClientGraphAnalysis();
+        Set<Integer> relevantIds = nodeIdSet(relevantNodes);
+        boolean changed = false;
+        for (CycleInfo cycle : analysis.cycles) {
+            if (!cycle.validSingleMaterialCycle || cycle.cycleMaterial == null || !cycleTouches(cycle, relevantIds)) {
+                continue;
+            }
+            ProcessNode owner = cycleMaterialOwnerNode(cycle);
+            if (owner == null || owner.cycleMaterialHandler.getStackInSlot(0) != null) {
+                continue;
+            }
+            ItemStack template = findCycleMaterialTemplate(cycle, cycle.cycleMaterial);
+            if (template == null) {
+                continue;
+            }
+            owner.cycleMaterialHandler.setStackInSlot(0, withDisplayAmount(template, 1L));
+            changed = true;
+        }
+        if (changed) {
+            refreshOpenEditorFields();
+            cachedClientGraphAnalysis = null;
+            cachedClientGraphNodeCount = -1;
+            cachedClientGraphEdgeCount = -1;
+        }
+        return analysis;
+    }
+
+    private ProcessNode cycleMaterialOwnerNode(CycleInfo cycle) {
+        ProcessNode first = null;
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode node = graph.findNode(nodeId);
+            if (node == null) {
+                continue;
+            }
+            if (first == null) {
+                first = node;
+            }
+            if (node.endNode) {
+                return node;
+            }
+        }
+        return first;
+    }
+
+    private ItemStack findCycleMaterialTemplate(CycleInfo cycle, MaterialKey material) {
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode node = graph.findNode(nodeId);
+            ItemStack stack = findMaterialInHandler(node == null ? null : node.outputHandler, material);
+            if (stack != null) {
+                return stack;
+            }
+        }
+        for (Integer nodeId : cycle.nodeIds) {
+            ProcessNode node = graph.findNode(nodeId);
+            ItemStack stack = findMaterialInHandler(node == null ? null : node.inputHandler, material);
+            if (stack != null) {
+                return stack;
+            }
+        }
+        return null;
+    }
+
+    private ItemStack findMaterialInHandler(ItemStackHandler handler, MaterialKey material) {
+        if (handler == null || material == null) {
+            return null;
+        }
+        for (int slot = 0; slot < handler.getSlots(); slot++) {
+            ItemStack stack = handler.getStackInSlot(slot);
+            if (stack != null && material.equals(materialKeyOf(stack))) {
+                return stack;
+            }
+        }
+        return null;
     }
 
     private ProcessBuildResult validateProcessGraph() {

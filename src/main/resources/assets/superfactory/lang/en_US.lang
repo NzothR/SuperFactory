@@ -182,6 +182,7 @@ superfactory.machine.super_integrated_factory.node_editor.machine=Machine
 superfactory.machine.super_integrated_factory.node_editor.inputs=Inputs
 superfactory.machine.super_integrated_factory.node_editor.outputs=Outputs
 superfactory.machine.super_integrated_factory.node_editor.non_consumables=NC Items
+superfactory.machine.super_integrated_factory.node_editor.cycle_material=Cycle Output
 superfactory.machine.super_integrated_factory.node_editor.end_node=Toggle target product node
 superfactory.machine.super_integrated_factory.node_editor.target_node=Toggle target product node
 superfactory.machine.super_integrated_factory.node_editor.locked=Toggle locked state

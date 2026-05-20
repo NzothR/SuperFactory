@@ -182,6 +182,7 @@ superfactory.machine.super_integrated_factory.node_editor.machine=主机
 superfactory.machine.super_integrated_factory.node_editor.inputs=原料
 superfactory.machine.super_integrated_factory.node_editor.outputs=产物
 superfactory.machine.super_integrated_factory.node_editor.non_consumables=NC物品
+superfactory.machine.super_integrated_factory.node_editor.cycle_material=循环产物
 superfactory.machine.super_integrated_factory.node_editor.end_node=切换目标产物节点
 superfactory.machine.super_integrated_factory.node_editor.target_node=切换目标产物节点
 superfactory.machine.super_integrated_factory.node_editor.locked=切换锁定状态

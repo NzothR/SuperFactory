@@ -9,6 +9,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.oredict.OreDictionary;
 
 import com.gtnewhorizons.modularui.api.forge.ItemStackHandler;
 import com.nzoth.superfactory.client.ui.GuiSuperIntegratedFactoryProcess;
@@ -390,7 +391,7 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             if (slot >= handler.getSlots()) {
                 return slot;
             }
-            handler.setStackInSlot(slot++, positionedStack.item.copy());
+            handler.setStackInSlot(slot++, normalizedPositionedInputStack(positionedStack));
         }
         return slot;
     }
@@ -420,15 +421,14 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             }
             NBTTagCompound variantTag = new NBTTagCompound();
             variantTag.setInteger("Slot", inputSlot);
-            variantTag.setInteger("SelectedIndex", selectedIndexOf(positionedStack));
+            ItemStack[] variantsForSave = concretePositionedVariants(positionedStack);
+            variantTag.setInteger("SelectedIndex", selectedIndexOf(positionedStack, variantsForSave));
             NBTTagList variants = new NBTTagList();
-            if (positionedStack.items != null) {
-                for (ItemStack variant : positionedStack.items) {
-                    if (variant != null) {
-                        NBTTagCompound stackTag = new NBTTagCompound();
-                        variant.writeToNBT(stackTag);
-                        variants.appendTag(stackTag);
-                    }
+            for (ItemStack variant : variantsForSave) {
+                if (variant != null) {
+                    NBTTagCompound stackTag = new NBTTagCompound();
+                    variant.writeToNBT(stackTag);
+                    variants.appendTag(stackTag);
                 }
             }
             variantTag.setTag("Variants", variants);
@@ -458,12 +458,16 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
     }
 
     private static int selectedIndexOf(PositionedStack positionedStack) {
+        return selectedIndexOf(positionedStack, concretePositionedVariants(positionedStack));
+    }
+
+    private static int selectedIndexOf(PositionedStack positionedStack, ItemStack[] variants) {
         if (positionedStack == null || positionedStack.items == null || positionedStack.item == null) {
             return 0;
         }
-        for (int i = 0; i < positionedStack.items.length; i++) {
-            if (positionedStack.items[i] != null
-                && GTUtility.areStacksEqual(positionedStack.items[i], positionedStack.item, true)) {
+        for (int i = 0; i < variants.length; i++) {
+            if (sameDisplayedVariant(variants[i], positionedStack.item)
+                || matchesConsumableType(variants[i], positionedStack.item)) {
                 return i;
             }
         }
@@ -644,6 +648,66 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
     private static boolean matchesConsumableType(ItemStack input, ItemStack stack) {
         return GTUtility.areStacksEqual(input, stack, false) || GTOreDictUnificator.isInputStackEqual(input, stack)
             || GTOreDictUnificator.isInputStackEqual(stack, input);
+    }
+
+    private static ItemStack normalizedPositionedInputStack(PositionedStack positionedStack) {
+        if (positionedStack == null || positionedStack.item == null) {
+            return null;
+        }
+        if (!isWildcardItemStack(positionedStack.item)) {
+            return positionedStack.item.copy();
+        }
+        ItemStack[] variants = concretePositionedVariants(positionedStack);
+        if (variants.length > 0) {
+            return variants[Math.max(0, Math.min(selectedIndexOf(positionedStack, variants), variants.length - 1))]
+                .copy();
+        }
+        return positionedStack.item.copy();
+    }
+
+    private static ItemStack[] concretePositionedVariants(PositionedStack positionedStack) {
+        if (positionedStack == null || positionedStack.items == null) {
+            return new ItemStack[0];
+        }
+        java.util.ArrayList<ItemStack> variants = new java.util.ArrayList<>();
+        for (ItemStack variant : positionedStack.items) {
+            if (variant != null && !isWildcardItemStack(variant)) {
+                addUniqueVariant(variants, variant);
+            }
+        }
+        if (variants.isEmpty() && positionedStack.item != null) {
+            addUniqueVariant(variants, positionedStack.item);
+        }
+        return variants.toArray(new ItemStack[0]);
+    }
+
+    private static void addUniqueVariant(List<ItemStack> variants, ItemStack stack) {
+        if (stack == null) {
+            return;
+        }
+        for (ItemStack existing : variants) {
+            if (sameDisplayedVariant(existing, stack)) {
+                return;
+            }
+        }
+        variants.add(stack.copy());
+    }
+
+    private static boolean isWildcardItemStack(ItemStack stack) {
+        return stack != null && stack.getItemDamage() == OreDictionary.WILDCARD_VALUE;
+    }
+
+    private static boolean sameDisplayedVariant(ItemStack left, ItemStack right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        FluidStack leftFluid = GTUtility.getFluidFromDisplayStack(left);
+        FluidStack rightFluid = GTUtility.getFluidFromDisplayStack(right);
+        if (leftFluid != null || rightFluid != null) {
+            return leftFluid != null && rightFluid != null && leftFluid.isFluidEqual(rightFluid);
+        }
+        return left.getItem() == right.getItem() && left.getItemDamage() == right.getItemDamage()
+            && ItemStack.areItemStackTagsEqual(left, right);
     }
 
 }

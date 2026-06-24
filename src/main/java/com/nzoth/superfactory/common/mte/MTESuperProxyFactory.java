@@ -14,6 +14,7 @@ import static gregtech.api.enums.HatchElement.OutputHatch;
 import static gregtech.api.util.GTStructureUtility.buildHatchAdder;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -55,6 +56,7 @@ import com.gtnewhorizons.modularui.common.widget.FakeSyncWidget;
 import com.gtnewhorizons.modularui.common.widget.SlotWidget;
 import com.gtnewhorizons.modularui.common.widget.TextWidget;
 import com.nzoth.superfactory.Config;
+import com.nzoth.superfactory.SuperFactory;
 import com.nzoth.superfactory.common.process.runtime.BufferedFluidStack;
 import com.nzoth.superfactory.common.process.runtime.BufferedItemStack;
 import com.nzoth.superfactory.common.process.runtime.ProcessBufferUtil;
@@ -80,6 +82,7 @@ import gregtech.api.logic.ProcessingLogic;
 import gregtech.api.metatileentity.implementations.MTEHatchOutput;
 import gregtech.api.metatileentity.implementations.MTEHatchOutputBus;
 import gregtech.api.metatileentity.implementations.MTEMultiBlockBase;
+import gregtech.api.objects.GTDualInputPattern;
 import gregtech.api.recipe.RecipeMap;
 import gregtech.api.recipe.RecipeMaps;
 import gregtech.api.recipe.check.CheckRecipeResult;
@@ -94,6 +97,7 @@ import gregtech.api.util.ParallelHelper;
 import gregtech.common.blocks.ItemMachines;
 import gregtech.common.misc.WirelessNetworkManager;
 import gregtech.common.tileentities.machines.IDualInputInventory;
+import gregtech.common.tileentities.machines.IDualInputInventoryWithPattern;
 import gregtech.common.tileentities.machines.MTEHatchOutputBusME;
 import gregtech.common.tileentities.machines.MTEHatchOutputME;
 import tectech.thing.gui.TecTechUITextures;
@@ -376,11 +380,17 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             return CheckRecipeResultRegistry.NO_RECIPE;
         }
         startRecipeProcessing();
+        List<Object> manuallyStartedDualInputHatches = ensureOptionalDualInputRecipeProcessingStarted();
         CheckRecipeResult result;
         try {
             result = checkCustomProcessing();
             this.checkRecipeResult = result;
         } finally {
+            CheckRecipeResult dualInputEndResult = endOptionalDualInputRecipeProcessing(
+                manuallyStartedDualInputHatches);
+            if (dualInputEndResult != null && !dualInputEndResult.wasSuccessful()) {
+                this.checkRecipeResult = dualInputEndResult;
+            }
             endRecipeProcessing();
         }
         if (!this.checkRecipeResult.wasSuccessful()) {
@@ -573,8 +583,140 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
     @Override
     public void onPostTick(IGregTechTileEntity baseMetaTileEntity, long tick) {
         super.onPostTick(baseMetaTileEntity, tick);
-        if (baseMetaTileEntity != null && baseMetaTileEntity.isServerSide() && tick != lastPendingOutputQueuedTick) {
+        if (baseMetaTileEntity == null || !baseMetaTileEntity.isServerSide()) {
+            return;
+        }
+        if (mMaxProgresstime <= 0 && hasUpdatedDualInputHatch()) {
+            checkRecipe();
+        }
+        if (tick != lastPendingOutputQueuedTick) {
             flushPendingOutputs();
+        }
+    }
+
+    private boolean hasUpdatedDualInputHatch() {
+        for (Object hatch : mDualInputHatches) {
+            Object result = invokeOptionalDualInputMethod(hatch, "justUpdated");
+            if (Boolean.TRUE.equals(result)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<Object> ensureOptionalDualInputRecipeProcessingStarted() {
+        if (mDualInputHatches.isEmpty()) {
+            return Collections.emptyList();
+        }
+        ArrayList<Object> manuallyStarted = new ArrayList<>();
+        for (Object hatch : mDualInputHatches) {
+            if (hatch == null || !hasOptionalDualInputMethod(hatch, "startRecipeProcessing")) {
+                continue;
+            }
+            Boolean recipeState = readBooleanField(hatch, "recipe");
+            if (!Boolean.FALSE.equals(recipeState)) {
+                debugProxyRuntime(
+                    "dual lifecycle already active or unknown, hatch={}, recipeState={}",
+                    describeClass(hatch),
+                    recipeState);
+                continue;
+            }
+            Object result = invokeOptionalDualInputMethod(hatch, "startRecipeProcessing");
+            if (result != CheckRecipeResultRegistry.INTERNAL_ERROR) {
+                manuallyStarted.add(hatch);
+            }
+            debugProxyRuntime(
+                "manually started dual lifecycle, hatch={}, beforeRecipeState={}, afterRecipeState={}",
+                describeClass(hatch),
+                recipeState,
+                readBooleanField(hatch, "recipe"));
+        }
+        return manuallyStarted.isEmpty() ? Collections.emptyList() : manuallyStarted;
+    }
+
+    private CheckRecipeResult endOptionalDualInputRecipeProcessing(List<Object> manuallyStartedDualInputHatches) {
+        if (manuallyStartedDualInputHatches == null || manuallyStartedDualInputHatches.isEmpty()) {
+            return CheckRecipeResultRegistry.SUCCESSFUL;
+        }
+        CheckRecipeResult result = CheckRecipeResultRegistry.SUCCESSFUL;
+        for (Object hatch : manuallyStartedDualInputHatches) {
+            Object value = invokeOptionalDualInputMethod(
+                hatch,
+                "endRecipeProcessing",
+                new Class<?>[] { MTEMultiBlockBase.class },
+                new Object[] { this });
+            if (value instanceof CheckRecipeResult checkResult && !checkResult.wasSuccessful()) {
+                result = checkResult;
+            }
+            debugProxyRuntime(
+                "manually ended dual lifecycle, hatch={}, result={}, afterRecipeState={}",
+                describeClass(hatch),
+                value,
+                readBooleanField(hatch, "recipe"));
+        }
+        return result;
+    }
+
+    private boolean hasOptionalDualInputMethod(Object target, String name) {
+        if (target == null) {
+            return false;
+        }
+        try {
+            target.getClass()
+                .getMethod(name);
+            return true;
+        } catch (NoSuchMethodException | SecurityException ignored) {
+            return false;
+        }
+    }
+
+    private Boolean readBooleanField(Object target, String name) {
+        if (target == null) {
+            return null;
+        }
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                Field field = type.getDeclaredField(name);
+                if (field.getType() != Boolean.TYPE && field.getType() != Boolean.class) {
+                    return null;
+                }
+                field.setAccessible(true);
+                Object value = field.get(target);
+                return value instanceof Boolean booleanValue ? booleanValue : null;
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            } catch (IllegalAccessException | SecurityException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Object invokeOptionalDualInputMethod(Object target, String name) {
+        return invokeOptionalDualInputMethod(target, name, new Class<?>[0], new Object[0]);
+    }
+
+    private Object invokeOptionalDualInputMethod(Object target, String name, Class<?>[] parameterTypes,
+        Object[] arguments) {
+        if (target == null) {
+            return null;
+        }
+        Method method;
+        try {
+            method = target.getClass()
+                .getMethod(name, parameterTypes);
+        } catch (NoSuchMethodException ignored) {
+            return null;
+        } catch (SecurityException ignored) {
+            return null;
+        }
+        try {
+            return method.invoke(target, arguments);
+        } catch (IllegalAccessException | IllegalArgumentException ignored) {
+            return null;
+        } catch (InvocationTargetException exception) {
+            return CheckRecipeResultRegistry.INTERNAL_ERROR;
         }
     }
 
@@ -1729,6 +1871,50 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         return lines;
     }
 
+    private void debugProxyRuntime(String message, Object... arguments) {
+        if (Config.debugSuperProxyFactoryRuntime) {
+            SuperFactory.LOG.info("[Super Proxy Factory/Runtime] " + message, arguments);
+        }
+    }
+
+    private String describeClass(Object value) {
+        return value == null ? "null"
+            : value.getClass()
+                .getName();
+    }
+
+    private String describeItemArray(ItemStack[] items) {
+        List<String> lines = collectRecipeEntryLines(items, GTValues.emptyFluidStackArray, false);
+        return lines.isEmpty() ? "[]" : lines.toString();
+    }
+
+    private String describeFluidArray(FluidStack[] fluids) {
+        List<String> lines = collectRecipeEntryLines(GTValues.emptyItemStackArray, fluids, false);
+        return lines.isEmpty() ? "[]" : lines.toString();
+    }
+
+    private String describeConsumptionPlan(ProxyRecipeConsumptionPlan plan) {
+        if (plan == null) {
+            return "null";
+        }
+        ArrayList<String> lines = new ArrayList<>();
+        for (ProxyRecipeConsumptionPlan.ItemDemand demand : plan.itemDemands) {
+            if (demand != null && demand.template != null && demand.amount > 0L) {
+                ItemStack copy = GTUtility.copyOrNull(demand.template);
+                if (copy != null) {
+                    copy.stackSize = (int) Math.min(Integer.MAX_VALUE, demand.amount);
+                    lines.add(copy.getDisplayName() + " x" + formatCompactAmount(demand.amount));
+                }
+            }
+        }
+        for (ProxyRecipeConsumptionPlan.FluidDemand demand : plan.fluidDemands) {
+            if (demand != null && demand.template != null && demand.amount > 0L) {
+                lines.add(demand.template.getLocalizedName() + " " + formatCompactAmount(demand.amount) + "L");
+            }
+        }
+        return lines.isEmpty() ? "[]" : lines.toString();
+    }
+
     private List<String> getRecipeLockDisplayLines() {
         if (recipeLockDisplayLines.isEmpty()) {
             return buildRecipeLockDisplayLines();
@@ -1993,6 +2179,7 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
 
     private CheckRecipeResult checkDualInputPatternHatches(RecipeMap<?> recipeMap) {
         if (mDualInputHatches.isEmpty()) {
+            debugProxyRuntime("dual input scan skipped: no dual input hatches");
             return CheckRecipeResultRegistry.NO_RECIPE;
         }
         CheckRecipeResult result = CheckRecipeResultRegistry.NO_RECIPE;
@@ -2001,22 +2188,47 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
                 continue;
             }
             ItemStack[] sharedItems = dualInputHatch.getSharedItems();
+            int visitedSlots = 0;
+            int usableSlots = 0;
+            debugProxyRuntime(
+                "dual input hatch scan start: hatch={}, sharedItems={}",
+                describeClass(dualInputHatch),
+                describeItemArray(sharedItems));
             for (Iterator<? extends IDualInputInventory> iterator = dualInputHatch.inventories(); iterator.hasNext();) {
+                visitedSlots++;
                 IDualInputInventory slot = iterator.next();
                 if (slot == null || slot.isEmpty()) {
+                    debugProxyRuntime(
+                        "dual input hatch slot skipped: hatch={}, slot={}, reason={}",
+                        describeClass(dualInputHatch),
+                        visitedSlots,
+                        slot == null ? "null" : "empty");
                     continue;
                 }
+                usableSlots++;
                 ItemStack[] slotItems = slot.getItemInputs();
                 FluidStack[] slotFluids = slot.getFluidInputs();
                 ItemStack[] liveItems = mergeItemInputs(sharedItems, slotItems);
                 FluidStack[] liveFluids = slotFluids == null ? GTValues.emptyFluidStackArray : slotFluids;
+                debugProxyRuntime(
+                    "dual input hatch slot inputs: hatch={}, slot={}, items={}, fluids={}, patternItems={}",
+                    describeClass(dualInputHatch),
+                    visitedSlots,
+                    describeItemArray(liveItems),
+                    describeFluidArray(liveFluids),
+                    describeItemArray(patternItemMarkers(slot)));
                 ProxyRecipeInputGroup inputGroup = new ProxyRecipeInputGroup(
                     (byte) -1,
                     liveItems,
                     liveFluids,
-                    buildQueryItems(liveItems),
+                    buildDualInputQueryItems(liveItems, slot),
                     buildQueryFluids(liveFluids));
                 CheckRecipeResult foundResult = tryStartRecipeForInputs(recipeMap, inputGroup);
+                debugProxyRuntime(
+                    "dual input hatch slot result: hatch={}, slot={}, result={}",
+                    describeClass(dualInputHatch),
+                    visitedSlots,
+                    foundResult);
                 if (foundResult.wasSuccessful()) {
                     return foundResult;
                 }
@@ -2024,6 +2236,12 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
                     result = foundResult;
                 }
             }
+            debugProxyRuntime(
+                "dual input hatch scan end: hatch={}, visitedSlots={}, usableSlots={}, result={}",
+                describeClass(dualInputHatch),
+                visitedSlots,
+                usableSlots,
+                result);
         }
         return result;
     }
@@ -2041,6 +2259,34 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             }
         }
         return merged.isEmpty() ? GTValues.emptyItemStackArray : merged.toArray(new ItemStack[0]);
+    }
+
+    private ItemStack[] buildDualInputQueryItems(ItemStack[] liveItems, IDualInputInventory slot) {
+        ArrayList<ItemStack> merged = new ArrayList<>(Arrays.asList(buildQueryItems(liveItems)));
+        for (ItemStack marker : patternItemMarkers(slot)) {
+            addQueryMarker(merged, marker);
+        }
+        return merged.isEmpty() ? GTValues.emptyItemStackArray : merged.toArray(new ItemStack[0]);
+    }
+
+    private ItemStack[] patternItemMarkers(IDualInputInventory slot) {
+        if (!(slot instanceof IDualInputInventoryWithPattern withPattern)) {
+            return GTValues.emptyItemStackArray;
+        }
+        GTDualInputPattern pattern = withPattern.getPatternInputs();
+        if (pattern == null || pattern.inputItems == null || pattern.inputItems.length == 0) {
+            return GTValues.emptyItemStackArray;
+        }
+        ArrayList<ItemStack> markers = new ArrayList<>();
+        for (ItemStack stack : pattern.inputItems) {
+            ItemStack marker = GTUtility.copyOrNull(stack);
+            if (marker == null) {
+                continue;
+            }
+            marker.stackSize = 1;
+            addQueryMarker(markers, marker);
+        }
+        return markers.isEmpty() ? GTValues.emptyItemStackArray : markers.toArray(new ItemStack[0]);
     }
 
     private void addDualInputStack(List<ItemStack> merged, ItemStack stack) {
@@ -2148,6 +2394,12 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
                 lastFailure = foundResult;
             }
         }
+        debugProxyRuntime(
+            "recipe search finished without success: map={}, items={}, fluids={}, lastFailure={}",
+            recipeMap.unlocalizedName,
+            describeItemArray(inputGroup.liveItems),
+            describeFluidArray(inputGroup.liveFluids),
+            lastFailure);
         return lastFailure;
     }
 
@@ -2195,11 +2447,19 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             return CheckRecipeResultRegistry.NO_RECIPE;
         }
 
-        int totalInputBound = recipeCheck != null && !eyeRecipe
-            ? recipeCheck.checkRecipeInputs(false, Integer.MAX_VALUE, liveItemArray, liveFluidArray)
-            : ProxyRecipeInputHandler
-                .computeConsumableInputBoundParallel(recipe, Integer.MAX_VALUE, liveItemArray, liveFluidArray);
+        int totalInputBound = ProxyRecipeInputHandler
+            .computeConsumableInputBoundParallel(recipe, Integer.MAX_VALUE, liveItemArray, liveFluidArray);
         int inputBound = Math.min(getEffectiveParallelLimit(), totalInputBound);
+        if (Config.debugSuperProxyFactoryRuntime) {
+            debugProxyRuntime(
+                "recipe input bound: recipe={}, totalInputBound={}, effectiveLimit={}, inputBound={}, items={}, fluids={}",
+                buildProxyRecipeSummary(recipe, Math.max(1, inputBound)),
+                totalInputBound,
+                getEffectiveParallelLimit(),
+                inputBound,
+                describeItemArray(liveItemArray),
+                describeFluidArray(liveFluidArray));
+        }
         if (inputBound <= 0) {
             return CheckRecipeResultRegistry.NO_RECIPE;
         }
@@ -2221,18 +2481,46 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         }
         actualParallel = clampOutputParallel(recipe, actualParallel);
         if (actualParallel <= 0) {
+            if (Config.debugSuperProxyFactoryRuntime) {
+                debugProxyRuntime(
+                    "recipe rejected by output routing: recipe={}, requestedParallel={}",
+                    buildProxyRecipeSummary(recipe, inputBound),
+                    inputBound);
+            }
             return CheckRecipeResultRegistry.ITEM_OUTPUT_FULL;
         }
 
         int executionInputBound = ProxyRecipeInputHandler.hasConsumableInputs(recipe) ? totalInputBound : inputBound;
         ProxyRecipeExecutionPlan plan = buildExecutionPlan(recipe, actualParallel, executionInputBound);
         if (plan == null) {
+            if (Config.debugSuperProxyFactoryRuntime) {
+                debugProxyRuntime(
+                    "recipe execution plan failed: recipe={}, actualParallel={}, executionInputBound={}",
+                    buildProxyRecipeSummary(recipe, actualParallel),
+                    actualParallel,
+                    executionInputBound);
+            }
             return CheckRecipeResultRegistry.INTERNAL_ERROR;
         }
         if (!canSupplyExecutionPlan(plan)) {
+            if (Config.debugSuperProxyFactoryRuntime) {
+                debugProxyRuntime(
+                    "recipe rejected by power after planning: recipe={}, actualParallel={}, euPerTick={}, availablePower={}",
+                    buildProxyRecipeSummary(plan),
+                    plan.actualParallel,
+                    plan.euPerTick,
+                    getAvailableProcessingPower());
+            }
             return CheckRecipeResultRegistry.insufficientPower(plan.euPerTick);
         }
         if (!canRouteOutputs(plan.outputItems, plan.outputFluids)) {
+            if (Config.debugSuperProxyFactoryRuntime) {
+                debugProxyRuntime(
+                    "recipe rejected by planned output routing: recipe={}, outputItems={}, outputFluids={}",
+                    buildProxyRecipeSummary(plan),
+                    describeItemArray(plan.outputItems),
+                    describeFluidArray(plan.outputFluids));
+            }
             return plan.outputItems != null && plan.outputItems.length > 0 && !canRouteItems(plan.outputItems)
                 ? CheckRecipeResultRegistry.ITEM_OUTPUT_FULL
                 : CheckRecipeResultRegistry.FLUID_OUTPUT_FULL;
@@ -2241,6 +2529,14 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         ProxyRecipeConsumptionPlan consumptionPlan = ProxyRecipeInputHandler
             .buildConsumptionPlan(recipe, plan.actualParallel);
         if (!ProxyRecipeInputHandler.canSatisfyConsumptionPlan(consumptionPlan, liveItemArray, liveFluidArray)) {
+            if (Config.debugSuperProxyFactoryRuntime) {
+                debugProxyRuntime(
+                    "recipe rejected by final consumption check: recipe={}, demands={}, liveItems={}, liveFluids={}",
+                    buildProxyRecipeSummary(plan),
+                    describeConsumptionPlan(consumptionPlan),
+                    describeItemArray(liveItemArray),
+                    describeFluidArray(liveFluidArray));
+            }
             return CheckRecipeResultRegistry.NO_RECIPE;
         }
 
@@ -2257,6 +2553,14 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
         }
         if (!consumeInputGroup(consumptionPlan, inputGroup)) {
             refundEnergyReservation(plan);
+            if (Config.debugSuperProxyFactoryRuntime) {
+                debugProxyRuntime(
+                    "recipe consumption failed: recipe={}, demands={}, liveItems={}, liveFluids={}",
+                    buildProxyRecipeSummary(plan),
+                    describeConsumptionPlan(consumptionPlan),
+                    describeItemArray(liveItemArray),
+                    describeFluidArray(liveFluidArray));
+            }
             return CheckRecipeResultRegistry.NO_RECIPE;
         }
 
@@ -3016,17 +3320,7 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
             if (copy == null || copy.stackSize <= 0) {
                 continue;
             }
-            boolean mergedExisting = false;
-            for (ItemStack existing : merged) {
-                if (GTUtility.areStacksEqual(existing, copy, false)) {
-                    existing.stackSize += copy.stackSize;
-                    mergedExisting = true;
-                    break;
-                }
-            }
-            if (!mergedExisting) {
-                merged.add(copy);
-            }
+            addQueryStackWithoutOverflow(merged, copy);
         }
         return merged.isEmpty() ? GTValues.emptyItemStackArray : merged.toArray(new ItemStack[0]);
     }
@@ -3088,19 +3382,60 @@ public class MTESuperProxyFactory extends TTMultiblockBase implements ISurvivalC
                 continue;
             }
             FluidStack copy = stack.copy();
-            boolean mergedExisting = false;
-            for (FluidStack existing : merged) {
-                if (GTUtility.areFluidsEqual(existing, copy)) {
-                    existing.amount += copy.amount;
-                    mergedExisting = true;
-                    break;
-                }
-            }
-            if (!mergedExisting) {
-                merged.add(copy);
-            }
+            addQueryFluidWithoutOverflow(merged, copy);
         }
         return merged.isEmpty() ? GTValues.emptyFluidStackArray : merged.toArray(new FluidStack[0]);
+    }
+
+    private void addQueryStackWithoutOverflow(ArrayList<ItemStack> merged, ItemStack stack) {
+        if (stack == null || stack.stackSize <= 0) {
+            return;
+        }
+        long remaining = stack.stackSize;
+        for (ItemStack existing : merged) {
+            if (remaining <= 0L) {
+                return;
+            }
+            if (!GTUtility.areStacksEqual(existing, stack, false) || existing.stackSize >= Integer.MAX_VALUE) {
+                continue;
+            }
+            int moved = (int) Math.min(remaining, Integer.MAX_VALUE - (long) existing.stackSize);
+            existing.stackSize += moved;
+            remaining -= moved;
+        }
+        while (remaining > 0L) {
+            ItemStack copy = GTUtility.copyOrNull(stack);
+            if (copy == null) {
+                return;
+            }
+            copy.stackSize = (int) Math.min(Integer.MAX_VALUE, remaining);
+            merged.add(copy);
+            remaining -= copy.stackSize;
+        }
+    }
+
+    private void addQueryFluidWithoutOverflow(ArrayList<FluidStack> merged, FluidStack stack) {
+        if (stack == null || stack.amount <= 0) {
+            return;
+        }
+        long remaining = stack.amount;
+        for (FluidStack existing : merged) {
+            if (remaining <= 0L) {
+                return;
+            }
+            if (!GTUtility.areFluidsEqual(existing, stack) || existing.amount >= Integer.MAX_VALUE) {
+                continue;
+            }
+            int moved = (int) Math.min(remaining, Integer.MAX_VALUE - (long) existing.amount);
+            existing.amount += moved;
+            remaining -= moved;
+        }
+        while (remaining > 0L) {
+            FluidStack copy = stack.copy();
+            copy.amount = (int) Math.min(Integer.MAX_VALUE, remaining);
+            merged.add(copy);
+            remaining -= copy.amount;
+        }
     }
 
     private static final class DisplayEntry {

@@ -20,6 +20,7 @@ public class Config {
     public static int superIntegratedFactoryMaxOutputFlushEntriesPerTick = 128;
     public static int superIntegratedFactoryMaxNodeStartsPerTick = 16;
     public static int superIntegratedFactoryLookaheadTicks = 20;
+    public static boolean debugSuperProxyFactoryRuntime = false;
     public static boolean debugExportIntegratedFactoryInternalBuffer = false;
     public static boolean debugIntegratedFactoryRuntime = false;
     public static boolean allowProxyFactoryAsIntegratedRecipeHost = true;
@@ -111,6 +112,11 @@ public class Config {
             0,
             200,
             "Running job lookahead window in ticks for Integrated Factory projected watermarks.");
+        debugSuperProxyFactoryRuntime = configuration.getBoolean(
+            "debugSuperProxyFactoryRuntime",
+            Configuration.CATEGORY_GENERAL,
+            debugSuperProxyFactoryRuntime,
+            "Debug only: log Super Proxy Factory recipe input scanning and special dual input hatch compatibility.");
         debugExportIntegratedFactoryInternalBuffer = configuration.getBoolean(
             "debugExportIntegratedFactoryInternalBuffer",
             Configuration.CATEGORY_GENERAL,

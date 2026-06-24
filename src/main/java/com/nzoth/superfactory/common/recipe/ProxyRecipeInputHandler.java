@@ -153,9 +153,6 @@ public final class ProxyRecipeInputHandler {
         }
         ItemStack[] safeItems = itemInputs == null ? GTValues.emptyItemStackArray : itemInputs;
         FluidStack[] safeFluids = fluidInputs == null ? GTValues.emptyFluidStackArray : fluidInputs;
-        if (!ProxyRecipeEffectiveValues.isEyeOfHarmony(recipe)) {
-            return recipe.isRecipeInputEqual(false, true, 1, safeFluids, safeItems);
-        }
         return matchesNonConsumableItemMarkers(recipe, safeItems)
             && canSatisfyItemDemands(buildItemDemands(recipe, effectiveItemInputs), recipe, safeItems)
             && canSatisfyFluidDemands(buildFluidDemands(effectiveFluidInputs), safeFluids);
@@ -786,17 +783,7 @@ public final class ProxyRecipeInputHandler {
             if (copy == null || copy.stackSize <= 0) {
                 continue;
             }
-            boolean mergedExisting = false;
-            for (ItemStack existing : merged) {
-                if (GTUtility.areStacksEqual(existing, copy, false)) {
-                    existing.stackSize += copy.stackSize;
-                    mergedExisting = true;
-                    break;
-                }
-            }
-            if (!mergedExisting) {
-                merged.add(copy);
-            }
+            addStackWithoutOverflow(merged, copy);
         }
         if (queryOnlyItems != null) {
             for (ItemStack marker : queryOnlyItems) {
@@ -830,19 +817,60 @@ public final class ProxyRecipeInputHandler {
                 continue;
             }
             FluidStack copy = stack.copy();
-            boolean mergedExisting = false;
-            for (FluidStack existing : merged) {
-                if (GTUtility.areFluidsEqual(existing, copy)) {
-                    existing.amount += copy.amount;
-                    mergedExisting = true;
-                    break;
-                }
-            }
-            if (!mergedExisting) {
-                merged.add(copy);
-            }
+            addFluidWithoutOverflow(merged, copy);
         }
         return merged.isEmpty() ? GTValues.emptyFluidStackArray : merged.toArray(new FluidStack[0]);
+    }
+
+    private static void addStackWithoutOverflow(ArrayList<ItemStack> merged, ItemStack stack) {
+        if (stack == null || stack.stackSize <= 0) {
+            return;
+        }
+        long remaining = stack.stackSize;
+        for (ItemStack existing : merged) {
+            if (remaining <= 0L) {
+                return;
+            }
+            if (!GTUtility.areStacksEqual(existing, stack, false) || existing.stackSize >= Integer.MAX_VALUE) {
+                continue;
+            }
+            int moved = (int) Math.min(remaining, Integer.MAX_VALUE - (long) existing.stackSize);
+            existing.stackSize += moved;
+            remaining -= moved;
+        }
+        while (remaining > 0L) {
+            ItemStack copy = GTUtility.copyOrNull(stack);
+            if (copy == null) {
+                return;
+            }
+            copy.stackSize = (int) Math.min(Integer.MAX_VALUE, remaining);
+            merged.add(copy);
+            remaining -= copy.stackSize;
+        }
+    }
+
+    private static void addFluidWithoutOverflow(ArrayList<FluidStack> merged, FluidStack stack) {
+        if (stack == null || stack.amount <= 0) {
+            return;
+        }
+        long remaining = stack.amount;
+        for (FluidStack existing : merged) {
+            if (remaining <= 0L) {
+                return;
+            }
+            if (!GTUtility.areFluidsEqual(existing, stack) || existing.amount >= Integer.MAX_VALUE) {
+                continue;
+            }
+            int moved = (int) Math.min(remaining, Integer.MAX_VALUE - (long) existing.amount);
+            existing.amount += moved;
+            remaining -= moved;
+        }
+        while (remaining > 0L) {
+            FluidStack copy = stack.copy();
+            copy.amount = (int) Math.min(Integer.MAX_VALUE, remaining);
+            merged.add(copy);
+            remaining -= copy.amount;
+        }
     }
 
     private static boolean isColorAbsent(short hatchColors, byte color) {

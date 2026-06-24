@@ -24,6 +24,7 @@ import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.EnumChatFormatting;
 import net.minecraft.util.StatCollector;
 import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.oredict.OreDictionary;
 
 import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
@@ -3664,9 +3665,14 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             && recipeWithAlt.mOreDictAlt[slot] != null
             && recipeWithAlt.mOreDictAlt[slot].length > 0) {
             List<ItemStack> variants = new ArrayList<>();
-            addUniqueVariant(variants, stack);
+            if (!isWildcardItemStack(stack)) {
+                addUniqueVariant(variants, stack);
+            }
             for (ItemStack alt : recipeWithAlt.mOreDictAlt[slot]) {
                 addUniqueVariant(variants, withDisplayAmount(alt, getEditableAmount(stack)));
+            }
+            if (variants.isEmpty()) {
+                addUniqueVariant(variants, stack);
             }
             return variants;
         }
@@ -3745,7 +3751,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             return;
         }
         for (ItemStack existing : variants) {
-            if (GTUtility.areStacksEqual(existing, stack, true)) {
+            if (sameDisplayedVariant(existing, stack)) {
                 return;
             }
         }
@@ -3754,11 +3760,29 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
 
     private int selectedVariantIndex(List<ItemStack> variants, ItemStack selected) {
         for (int i = 0; i < variants.size(); i++) {
-            if (GTUtility.areStacksEqual(variants.get(i), selected, true)) {
+            if (sameDisplayedVariant(variants.get(i), selected)
+                || recipeInputAcceptsProvided(variants.get(i), selected)) {
                 return i;
             }
         }
         return 0;
+    }
+
+    private boolean isWildcardItemStack(ItemStack stack) {
+        return stack != null && stack.getItemDamage() == OreDictionary.WILDCARD_VALUE;
+    }
+
+    private boolean sameDisplayedVariant(ItemStack left, ItemStack right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        FluidStack leftFluid = GTUtility.getFluidFromDisplayStack(left);
+        FluidStack rightFluid = GTUtility.getFluidFromDisplayStack(right);
+        if (leftFluid != null || rightFluid != null) {
+            return leftFluid != null && rightFluid != null && leftFluid.isFluidEqual(rightFluid);
+        }
+        return left.getItem() == right.getItem() && left.getItemDamage() == right.getItemDamage()
+            && ItemStack.areItemStackTagsEqual(left, right);
     }
 
     private void fillHandlerFromNonConsumables(ItemStackHandler handler, GTRecipe recipe) {

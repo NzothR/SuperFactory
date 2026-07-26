@@ -214,6 +214,8 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     private final List<ProcessNode> cachedSchedulingOrder = new ArrayList<>();
     private final Map<Integer, ProcessNode> cachedRuntimeNodesById = new LinkedHashMap<>();
     private final Map<Integer, Double> runCreditByNode = new LinkedHashMap<>();
+    /** Shared cache reused across all distanceToTerminal calls in a tick. Rebuilt on graph change. */
+    private final Map<Integer, Integer> terminalDistanceCache = new LinkedHashMap<>();
     private GraphAnalysisResult pendingGraphAnalysis;
     private GraphAnalysisResult runtimeGraphAnalysis;
     private GraphAnalysisResult deferredGraphAnalysis;
@@ -280,7 +282,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
 
         @Override
         public int distanceToTerminal(ProcessNode node) {
-            return MTESuperIntegratedFactory.this.distanceToTerminal(node, new LinkedHashMap<>());
+            return MTESuperIntegratedFactory.this.distanceToTerminal(node, terminalDistanceCache);
         }
 
         @Override
@@ -2278,13 +2280,13 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     private void rebuildRuntimeSchedulingCache() {
         cachedSchedulingOrder.clear();
         cachedRuntimeNodesById.clear();
+        terminalDistanceCache.clear();
         runCreditByNode.keySet()
             .removeIf(nodeId -> runtimeGraph.findNode(nodeId) == null);
         ArrayList<ProcessNode> nodes = new ArrayList<>(runtimeGraph.nodes);
         for (ProcessNode node : nodes) {
             cachedRuntimeNodesById.put(node.id, node);
         }
-        Map<Integer, Integer> terminalDistanceCache = new LinkedHashMap<>();
         nodes.sort(
             Comparator.comparingInt((ProcessNode node) -> distanceToTerminal(node, terminalDistanceCache))
                 .thenComparingInt(node -> node.id));

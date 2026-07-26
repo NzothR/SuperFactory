@@ -1,6 +1,7 @@
 package com.nzoth.superfactory.client.nei;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.List;
 
 import net.minecraft.client.Minecraft;
@@ -14,8 +15,8 @@ import net.minecraftforge.oredict.OreDictionary;
 import com.gtnewhorizons.modularui.api.forge.ItemStackHandler;
 import com.nzoth.superfactory.client.ui.GuiSuperIntegratedFactoryProcess;
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
-import com.nzoth.superfactory.common.network.MessageSetProcessNodeRecipe;
-import com.nzoth.superfactory.common.network.NetworkLoader;
+import com.nzoth.superfactory.common.network.LargeNbtSplitter;
+import com.nzoth.superfactory.common.network.MessageLargeNbtChunkTransfer;
 import com.nzoth.superfactory.common.process.ProcessNode;
 
 import codechicken.nei.PositionedStack;
@@ -80,8 +81,11 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             NBTTagCompound recipeTag = buildRecipeTag(handler, handlerRef.recipeIndex);
             factory.applyRecipeToNode(nodeId, recipeTag);
             processGui.closeCandidateSelectorAfterExternalApply(nodeId);
-            NetworkLoader.INSTANCE
-                .sendToServer(new MessageSetProcessNodeRecipe(factory.getBaseMetaTileEntity(), nodeId, recipeTag));
+            LargeNbtSplitter.send(
+                factory.getBaseMetaTileEntity(),
+                recipeTag,
+                MessageLargeNbtChunkTransfer.TYPE_SET_NODE_RECIPE,
+                nodeId);
             Minecraft.getMinecraft()
                 .displayGuiScreen(firstGui);
             return;
@@ -91,6 +95,112 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
 
     private static boolean isUnsupportedRecipeMapName(String recipeMapName) {
         return false;
+    }
+
+    /**
+     * Collects all fake-recipe pages in the handler whose consumable item inputs match the reference page.
+     */
+    private static List<GTNEIDefaultHandler.CachedDefaultRecipe> collectFakeRecipePages(GTNEIDefaultHandler handler,
+        GTNEIDefaultHandler.CachedDefaultRecipe reference) {
+        List<GTNEIDefaultHandler.CachedDefaultRecipe> siblings = new ArrayList<>();
+        ItemStack[] referenceInputs = consumableInputs(reference.mRecipe.mInputs);
+        for (Object entry : handler.arecipes) {
+            if (!(entry instanceof GTNEIDefaultHandler.CachedDefaultRecipe other) || !other.mRecipe.mFakeRecipe) {
+                continue;
+            }
+            if (sameFakeRecipeConsumableInputs(referenceInputs, consumableInputs(other.mRecipe.mInputs))) {
+                siblings.add(other);
+            }
+        }
+        return siblings;
+    }
+
+    private static boolean sameFakeRecipeConsumableInputs(ItemStack[] a, ItemStack[] b) {
+        if (a.length != b.length) {
+            return false;
+        }
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] == null) {
+                if (b[i] != null) {
+                    return false;
+                }
+                continue;
+            }
+            if (b[i] == null || !matchesConsumableType(a[i], b[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static ItemStack[] mergeFakeRecipeItemOutputs(List<GTNEIDefaultHandler.CachedDefaultRecipe> siblings) {
+        List<ItemStack> merged = new ArrayList<>();
+        for (GTNEIDefaultHandler.CachedDefaultRecipe page : siblings) {
+            for (ItemStack output : effectiveItemOutputs(page.mRecipe)) {
+                if (output != null && output.stackSize > 0) {
+                    merged.add(output);
+                }
+            }
+        }
+        return merged.toArray(new ItemStack[0]);
+    }
+
+    private static FluidStack[] mergeFakeRecipeFluidOutputs(List<GTNEIDefaultHandler.CachedDefaultRecipe> siblings) {
+        List<FluidStack> merged = new ArrayList<>();
+        for (GTNEIDefaultHandler.CachedDefaultRecipe page : siblings) {
+            for (FluidStack output : effectiveFluidOutputs(page.mRecipe)) {
+                if (output != null && output.amount > 0) {
+                    merged.add(output);
+                }
+            }
+        }
+        return merged.toArray(new FluidStack[0]);
+    }
+
+    private static List<PositionedStack> mergeFakeRecipeOutputPositions(
+        List<GTNEIDefaultHandler.CachedDefaultRecipe> siblings) {
+        List<PositionedStack> merged = new ArrayList<>();
+        for (GTNEIDefaultHandler.CachedDefaultRecipe page : siblings) {
+            if (page.mOutputs != null) {
+                for (PositionedStack stack : page.mOutputs) {
+                    if (stack != null) {
+                        merged.add(stack);
+                    }
+                }
+            }
+        }
+        return merged;
+    }
+
+    /**
+     * Builds output chances from merged PositionedStack lists instead of a single GTRecipe.
+     */
+    private static int[] buildOutputChancesFromPositionedStacks(ItemStackHandler outputs,
+        List<PositionedStack> positionedOutputs) {
+        int[] chances = new int[ProcessNode.OUTPUT_SLOTS];
+        java.util.Arrays.fill(chances, 10000);
+        if (positionedOutputs == null || positionedOutputs.isEmpty()) {
+            return chances;
+        }
+        for (int slot = 0; slot < outputs.getSlots(); slot++) {
+            ItemStack existing = outputs.getStackInSlot(slot);
+            if (existing == null) {
+                continue;
+            }
+            for (PositionedStack positioned : positionedOutputs) {
+                if (positioned == null || positioned.item == null) {
+                    continue;
+                }
+                if (GTUtility.areStacksEqual(existing, positioned.item, true)) {
+                    Integer chance = positionedStackChance(positioned);
+                    if (chance != null && chance > 0) {
+                        chances[slot] = normalizeRecipeChance(chance);
+                    }
+                    break;
+                }
+            }
+        }
+        return chances;
     }
 
     public static void updateRecipeButtons(GuiRecipe<?> guiRecipe, List<GuiRecipeButton> buttonList) {
@@ -117,6 +227,20 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
         fillHandlerWithFluids(inputHandler, effectiveFluidInputs(cached.mRecipe));
         ItemStack[] itemOutputs = effectiveItemOutputs(cached.mRecipe);
         FluidStack[] fluidOutputs = effectiveFluidOutputs(cached.mRecipe);
+        List<PositionedStack> mergedOutputPositions = new ArrayList<>(cached.mOutputs);
+        /*
+         * For fake recipes (e.g. GT-Not-Hard Singularity recipes) a single logical recipe may be split across multiple
+         * NEI pages because the RecipeMap limits output slots per page. Collect all sibling pages with identical
+         * consumable inputs and merge their outputs so the + button imports the complete recipe.
+         */
+        if (cached.mRecipe.mFakeRecipe) {
+            List<GTNEIDefaultHandler.CachedDefaultRecipe> siblings = collectFakeRecipePages(handler, cached);
+            if (siblings.size() > 1) {
+                itemOutputs = mergeFakeRecipeItemOutputs(siblings);
+                fluidOutputs = mergeFakeRecipeFluidOutputs(siblings);
+                mergedOutputPositions = mergeFakeRecipeOutputPositions(siblings);
+            }
+        }
         fillHandler(outputHandler, itemOutputs);
         fillHandlerWithFluids(outputHandler, fluidOutputs);
         fillNonConsumables(nonConsumableHandler, cached, cached.mRecipe.mFakeRecipe);
@@ -124,7 +248,7 @@ public final class SuperIntegratedFactoryOverlayButton extends GuiOverlayButton 
             cached.mInputs,
             cached.mRecipe.mInputs,
             cached.mRecipe.mFakeRecipe);
-        int[] outputChances = buildOutputChances(outputHandler, cached.mOutputs, cached.mRecipe, itemOutputs);
+        int[] outputChances = buildOutputChancesFromPositionedStacks(outputHandler, mergedOutputPositions);
         int duration = effectiveDuration(cached.mRecipe);
         long euPerTick = effectiveEuPerTick(cached.mRecipe, duration);
 

@@ -6,7 +6,6 @@ import net.minecraft.tileentity.TileEntity;
 
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
 
-import cpw.mods.fml.common.network.ByteBufUtils;
 import cpw.mods.fml.common.network.simpleimpl.IMessage;
 import cpw.mods.fml.common.network.simpleimpl.IMessageHandler;
 import cpw.mods.fml.common.network.simpleimpl.MessageContext;
@@ -37,7 +36,7 @@ public final class MessageSetProcessNodeRecipe implements IMessage {
         y = buf.readInt();
         z = buf.readInt();
         nodeId = buf.readInt();
-        recipeTag = ByteBufUtils.readTag(buf);
+        recipeTag = LargeNbtHelper.readLargeTag(buf);
     }
 
     @Override
@@ -46,7 +45,7 @@ public final class MessageSetProcessNodeRecipe implements IMessage {
         buf.writeInt(y);
         buf.writeInt(z);
         buf.writeInt(nodeId);
-        ByteBufUtils.writeTag(buf, recipeTag);
+        LargeNbtHelper.writeLargeTag(buf, recipeTag);
     }
 
     public static final class Handler implements IMessageHandler<MessageSetProcessNodeRecipe, IMessage> {

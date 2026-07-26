@@ -6,7 +6,6 @@ import net.minecraft.tileentity.TileEntity;
 
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
 
-import cpw.mods.fml.common.network.ByteBufUtils;
 import cpw.mods.fml.common.network.simpleimpl.IMessage;
 import cpw.mods.fml.common.network.simpleimpl.IMessageHandler;
 import cpw.mods.fml.common.network.simpleimpl.MessageContext;
@@ -34,7 +33,7 @@ public final class MessageSubmitProcessRequirements implements IMessage {
         x = buf.readInt();
         y = buf.readInt();
         z = buf.readInt();
-        requirementsTag = ByteBufUtils.readTag(buf);
+        requirementsTag = LargeNbtHelper.readLargeTag(buf);
     }
 
     @Override
@@ -42,7 +41,7 @@ public final class MessageSubmitProcessRequirements implements IMessage {
         buf.writeInt(x);
         buf.writeInt(y);
         buf.writeInt(z);
-        ByteBufUtils.writeTag(buf, requirementsTag);
+        LargeNbtHelper.writeLargeTag(buf, requirementsTag);
     }
 
     public static final class Handler implements IMessageHandler<MessageSubmitProcessRequirements, IMessage> {

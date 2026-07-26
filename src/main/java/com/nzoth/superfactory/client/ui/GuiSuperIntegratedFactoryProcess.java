@@ -32,10 +32,10 @@ import org.lwjgl.opengl.GL11;
 import com.gtnewhorizons.modularui.api.forge.ItemStackHandler;
 import com.nzoth.superfactory.SuperFactory;
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
+import com.nzoth.superfactory.common.network.LargeNbtSplitter;
 import com.nzoth.superfactory.common.network.MessageExportProcessRawMaterials;
+import com.nzoth.superfactory.common.network.MessageLargeNbtChunkTransfer;
 import com.nzoth.superfactory.common.network.MessageRestoreSubmittedProcessGraph;
-import com.nzoth.superfactory.common.network.MessageSubmitProcessRequirements;
-import com.nzoth.superfactory.common.network.MessageUpdateProcessGraph;
 import com.nzoth.superfactory.common.network.NetworkLoader;
 import com.nzoth.superfactory.common.process.ProcessEdge;
 import com.nzoth.superfactory.common.process.ProcessGraph;
@@ -4356,10 +4356,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         analyzeAndBackfillCycleMaterials(result.nodes);
         if (factory.getBaseMetaTileEntity() != null) {
             syncGraph();
-            NetworkLoader.INSTANCE.sendToServer(
-                new MessageSubmitProcessRequirements(
-                    factory.getBaseMetaTileEntity(),
-                    result.requirements.writeToNBT()));
+            LargeNbtSplitter.send(
+                factory.getBaseMetaTileEntity(),
+                result.requirements.writeToNBT(),
+                MessageLargeNbtChunkTransfer.TYPE_SUBMIT_PROCESS_REQUIREMENTS,
+                0);
         }
         closeGui();
     }
@@ -6847,8 +6848,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         cachedClientGraphEdgeCount = -1;
         if (factory.getBaseMetaTileEntity() != null) {
             NBTTagCompound graphTag = graph.writeToNBT();
-            NetworkLoader.INSTANCE
-                .sendToServer(new MessageUpdateProcessGraph(factory.getBaseMetaTileEntity(), graphTag));
+            LargeNbtSplitter.send(
+                factory.getBaseMetaTileEntity(),
+                graphTag,
+                MessageLargeNbtChunkTransfer.TYPE_UPDATE_PROCESS_GRAPH,
+                0);
         }
     }
 

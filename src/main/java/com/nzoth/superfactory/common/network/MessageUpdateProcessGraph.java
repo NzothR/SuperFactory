@@ -6,7 +6,6 @@ import net.minecraft.tileentity.TileEntity;
 
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
 
-import cpw.mods.fml.common.network.ByteBufUtils;
 import cpw.mods.fml.common.network.simpleimpl.IMessage;
 import cpw.mods.fml.common.network.simpleimpl.IMessageHandler;
 import cpw.mods.fml.common.network.simpleimpl.MessageContext;
@@ -34,7 +33,7 @@ public final class MessageUpdateProcessGraph implements IMessage {
         x = buf.readInt();
         y = buf.readInt();
         z = buf.readInt();
-        graphTag = ByteBufUtils.readTag(buf);
+        graphTag = LargeNbtHelper.readLargeTag(buf);
     }
 
     @Override
@@ -42,7 +41,7 @@ public final class MessageUpdateProcessGraph implements IMessage {
         buf.writeInt(x);
         buf.writeInt(y);
         buf.writeInt(z);
-        ByteBufUtils.writeTag(buf, graphTag);
+        LargeNbtHelper.writeLargeTag(buf, graphTag);
     }
 
     public static final class Handler implements IMessageHandler<MessageUpdateProcessGraph, IMessage> {

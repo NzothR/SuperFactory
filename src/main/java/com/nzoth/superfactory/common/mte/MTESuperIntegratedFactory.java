@@ -13,7 +13,6 @@ import static gregtech.api.enums.HatchElement.OutputBus;
 import static gregtech.api.enums.HatchElement.OutputHatch;
 import static gregtech.api.util.GTStructureUtility.buildHatchAdder;
 
-import java.io.IOException;
 import java.lang.reflect.Field;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -58,6 +57,7 @@ import com.gtnewhorizons.modularui.common.widget.TextWidget;
 import com.nzoth.superfactory.Config;
 import com.nzoth.superfactory.SuperFactory;
 import com.nzoth.superfactory.common.loader.MachineLoader;
+import com.nzoth.superfactory.common.network.LargeNbtHelper;
 import com.nzoth.superfactory.common.network.MessageProcessCanvasStatus;
 import com.nzoth.superfactory.common.network.NetworkLoader;
 import com.nzoth.superfactory.common.process.ProcessEdge;
@@ -1307,22 +1307,14 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private void writeProcessGraphPacket(PacketBuffer buffer, ProcessGraph graph) {
-        try {
-            buffer.writeNBTTagCompoundToBuffer(graph.writeToNBT());
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        LargeNbtHelper.writeToPacketBuffer(buffer, graph.writeToNBT());
     }
 
     private ProcessGraph readProcessGraphPacket(PacketBuffer buffer) {
         ProcessGraph graph = new ProcessGraph();
-        try {
-            NBTTagCompound tag = buffer.readNBTTagCompoundFromBuffer();
-            if (tag != null) {
-                graph.readFromNBT(tag);
-            }
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        NBTTagCompound tag = LargeNbtHelper.readFromPacketBuffer(buffer);
+        if (tag != null) {
+            graph.readFromNBT(tag);
         }
         return graph;
     }
@@ -1465,22 +1457,14 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     }
 
     private void writeProcessRequirementsPacket(PacketBuffer buffer, ProcessRequirements requirements) {
-        try {
-            buffer.writeNBTTagCompoundToBuffer(requirements.writeToNBT());
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        LargeNbtHelper.writeToPacketBuffer(buffer, requirements.writeToNBT());
     }
 
     private ProcessRequirements readProcessRequirementsPacket(PacketBuffer buffer) {
         ProcessRequirements requirements = new ProcessRequirements();
-        try {
-            NBTTagCompound tag = buffer.readNBTTagCompoundFromBuffer();
-            if (tag != null) {
-                requirements.readFromNBT(tag);
-            }
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        NBTTagCompound tag = LargeNbtHelper.readFromPacketBuffer(buffer);
+        if (tag != null) {
+            requirements.readFromNBT(tag);
         }
         return requirements;
     }

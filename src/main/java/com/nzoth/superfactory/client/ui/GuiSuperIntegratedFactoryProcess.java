@@ -4358,8 +4358,7 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         if (factory.getBaseMetaTileEntity() != null) {
             syncGraph();
             if (Config.debugIntegratedFactoryNetwork) {
-                SuperFactory.LOG.info(
-                    "[Super Integrated Factory/Network] 客户端提交工序需求: type=SUBMIT_PROCESS_REQUIREMENTS");
+                SuperFactory.LOG.info("[Super Integrated Factory/Network] 客户端提交工序需求: type=SUBMIT_PROCESS_REQUIREMENTS");
             }
             LargeNbtSplitter.send(
                 factory.getBaseMetaTileEntity(),
@@ -6856,7 +6855,8 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
             if (Config.debugIntegratedFactoryNetwork) {
                 SuperFactory.LOG.info(
                     "[Super Integrated Factory/Network] 客户端同步工序图: type=UPDATE_PROCESS_GRAPH, nodes={}, edges={}",
-                    graph.nodes.size(), graph.edges.size());
+                    graph.nodes.size(),
+                    graph.edges.size());
             }
             LargeNbtSplitter.send(
                 factory.getBaseMetaTileEntity(),

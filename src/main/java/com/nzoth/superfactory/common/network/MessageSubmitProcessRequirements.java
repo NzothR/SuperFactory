@@ -56,8 +56,8 @@ public final class MessageSubmitProcessRequirements implements IMessage {
                 factory.submitProcessRequirements(message.requirementsTag);
                 baseTile.markDirty();
                 if (com.nzoth.superfactory.Config.debugIntegratedFactoryNetwork) {
-                    com.nzoth.superfactory.SuperFactory.LOG.info(
-                        "[Super Integrated Factory/Network] MessageSubmitProcessRequirements 收到提交请求");
+                    com.nzoth.superfactory.SuperFactory.LOG
+                        .info("[Super Integrated Factory/Network] MessageSubmitProcessRequirements 收到提交请求");
                 }
             }
             return null;

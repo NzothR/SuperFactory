@@ -168,7 +168,9 @@ public final class MessageLargeNbtChunkTransfer implements IMessage {
                 if (debug) {
                     com.nzoth.superfactory.SuperFactory.LOG.info(
                         "[Super Integrated Factory/Network] 开始接收分块传输: transferId={}, type={}, totalChunks={}",
-                        transferId, message.transferType, chunk.totalChunks());
+                        transferId,
+                        message.transferType,
+                        chunk.totalChunks());
                 }
             }
             if (pending.fragments.length <= chunk.chunkIndex() || chunk.chunkIndex() < 0) {
@@ -182,7 +184,11 @@ public final class MessageLargeNbtChunkTransfer implements IMessage {
             if (debug) {
                 com.nzoth.superfactory.SuperFactory.LOG.info(
                     "[Super Integrated Factory/Network] 收到分块: transferId={}, index={}/{}, received={}/{}",
-                    transferId, chunk.chunkIndex(), chunk.totalChunks(), pending.received, pending.fragments.length);
+                    transferId,
+                    chunk.chunkIndex(),
+                    chunk.totalChunks(),
+                    pending.received,
+                    pending.fragments.length);
             }
             if (!pending.complete()) {
                 return null;
@@ -191,7 +197,8 @@ public final class MessageLargeNbtChunkTransfer implements IMessage {
             if (debug) {
                 com.nzoth.superfactory.SuperFactory.LOG.info(
                     "[Super Integrated Factory/Network] 分块传输完成: transferId={}, type={}",
-                    transferId, message.transferType);
+                    transferId,
+                    message.transferType);
             }
             try {
                 byte[] compressed = pending.assemble();
@@ -200,8 +207,8 @@ public final class MessageLargeNbtChunkTransfer implements IMessage {
                         new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(compressed))));
                 if (tag == null) {
                     if (debug) {
-                        com.nzoth.superfactory.SuperFactory.LOG.warn(
-                            "[Super Integrated Factory/Network] NBT 反序列化为 null: transferId={}", transferId);
+                        com.nzoth.superfactory.SuperFactory.LOG
+                            .warn("[Super Integrated Factory/Network] NBT 反序列化为 null: transferId={}", transferId);
                     }
                     return null;
                 }
@@ -212,15 +219,17 @@ public final class MessageLargeNbtChunkTransfer implements IMessage {
                     if (debug) {
                         com.nzoth.superfactory.SuperFactory.LOG.warn(
                             "[Super Integrated Factory/Network] 目标方块无效或不是集成工厂: x={}, y={}, z={}",
-                            pending.x, pending.y, pending.z);
+                            pending.x,
+                            pending.y,
+                            pending.z);
                     }
                     return null;
                 }
                 switch (pending.transferType) {
                     case TYPE_SET_NODE_RECIPE:
                         if (debug) {
-                            com.nzoth.superfactory.SuperFactory.LOG.info(
-                                "[Super Integrated Factory/Network] 处理节点配方: nodeId={}", pending.nodeId);
+                            com.nzoth.superfactory.SuperFactory.LOG
+                                .info("[Super Integrated Factory/Network] 处理节点配方: nodeId={}", pending.nodeId);
                         }
                         factory.applyRecipeToNode(pending.nodeId, tag);
                         if (player.openContainer != null) {
@@ -239,8 +248,7 @@ public final class MessageLargeNbtChunkTransfer implements IMessage {
                         break;
                     case TYPE_SUBMIT_PROCESS_REQUIREMENTS:
                         if (debug) {
-                            com.nzoth.superfactory.SuperFactory.LOG.info(
-                                "[Super Integrated Factory/Network] 提交工序需求");
+                            com.nzoth.superfactory.SuperFactory.LOG.info("[Super Integrated Factory/Network] 提交工序需求");
                         }
                         factory.submitProcessRequirements(tag);
                         baseTile.markDirty();
@@ -250,8 +258,8 @@ public final class MessageLargeNbtChunkTransfer implements IMessage {
                 }
             } catch (Exception e) {
                 if (debug) {
-                    com.nzoth.superfactory.SuperFactory.LOG.error(
-                        "[Super Integrated Factory/Network] 分块传输处理异常: transferId={}", transferId, e);
+                    com.nzoth.superfactory.SuperFactory.LOG
+                        .error("[Super Integrated Factory/Network] 分块传输处理异常: transferId={}", transferId, e);
                 }
             }
             return null;

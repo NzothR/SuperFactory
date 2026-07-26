@@ -949,7 +949,8 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         if (Config.debugIntegratedFactoryNetwork) {
             SuperFactory.LOG.info(
                 "[Super Integrated Factory/Network] 收到工序图同步: nodes={}, edges={}",
-                processGraph.nodes.size(), processGraph.edges.size());
+                processGraph.nodes.size(),
+                processGraph.edges.size());
         }
     }
 
@@ -957,7 +958,8 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
         if (Config.debugIntegratedFactoryNetwork) {
             SuperFactory.LOG.info(
                 "[Super Integrated Factory/Network] 收到工序提交请求: mode={}, nodes={}",
-                factoryMode, processGraph.nodes.size());
+                factoryMode,
+                processGraph.nodes.size());
         }
         ProcessRequirements incoming = new ProcessRequirements();
         incoming.readFromNBT(requirementsTag);

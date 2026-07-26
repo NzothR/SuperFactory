@@ -178,11 +178,15 @@ ProcessNode {
     overclockCount
     parallelLimit
 
-    targetProductNode
-    explicitTargetOutputs
+    endNode              // V2 语义: 目标产物节点标记, NBT 兼容名
+    cycleMaterial        // 手动标记的循环物料（可选，存放于 node.cycleMaterialHandler[0]）
 
     nonConsumableItems
     requiredController
+    
+    // 以下字段为设计预留，当前源码使用 endNode + 自动推断实现
+    // targetProductNode
+    // explicitTargetOutputs
 }
 ```
 
@@ -1306,21 +1310,21 @@ actualParallel < 1
 ```text
 RunningJob {
     nodeId
-    actualParallel
+    parallel
+    durationTicks
+    euPerTick
     remainingTicks
-    consumedInputsExactStacks
-    effectiveDuration
-    effectiveEuPerTick
-    totalEU
-    startedAtTick
+    reservedEnergy
+    consumedItems
+    consumedFluids
 }
 ```
 
 启动时：
 
 ```text
-消耗 input × actualParallel
-创建 job
+消耗 input × parallel
+创建 job，将消耗记录写入 consumedItems / consumedFluids
 ```
 
 推进时：
@@ -1332,7 +1336,7 @@ remainingTicks -= 1
 完成时：
 
 ```text
-产出 output × actualParallel
+产出 output × parallel
 进行输出路由
 ```
 
@@ -1378,11 +1382,11 @@ remainingTicks -= 1
 每个调度周期，调度器将可启动节点放入以下候选队列：
 
 ```text
-L0：强制推进队列
-L1：内部消耗队列
-L2：目标推进队列
-L3：缺料补给队列
-L4：普通源头队列
+L0：强制推进队列    (当前 classifyCandidateLayer 不分配此层，为预留优先级)
+L1：内部消耗队列    (consumesAvailableInternalInput)
+L2：目标推进队列    (producesTargetOutput; 仅在非 L1 时触发)
+L3：缺料补给队列    (suppliesLowWater; 仅在非 L1 时触发)
+L4：普通源头队列    (兜底)
 ```
 
 调度器按：
@@ -1392,6 +1396,8 @@ L0 -> L1 -> L2 -> L3 -> L4
 ```
 
 依次尝试启动。
+
+注意：源码中 `classifyCandidateLayer` 的实际分配顺序是 `INTERNAL_CONSUME → LOW_WATER_SUPPLY → TARGET_PROGRESS → SOURCE_PRODUCTION`，结合 `CandidateLayer` 枚举声明顺序 (`FORCED_PROGRESS, INTERNAL_CONSUME, TARGET_PROGRESS, LOW_WATER_SUPPLY, SOURCE_PRODUCTION`)，实际运行时的调度优先级为 FORCED_PROGRESS(预留) > INTERNAL_CONSUME > TARGET_PROGRESS > LOW_WATER_SUPPLY > SOURCE_PRODUCTION。
 
 ---
 
@@ -2082,13 +2088,13 @@ SubmitPlan {
 ```text
 RunningJob {
     nodeId
-    actualParallel
+    parallel
+    durationTicks
+    euPerTick
     remainingTicks
-    consumedInputsExactStacks
-    effectiveDuration
-    effectiveEuPerTick
-    totalEU
-    startedAtTick
+    reservedEnergy
+    consumedItems
+    consumedFluids
 }
 ```
 

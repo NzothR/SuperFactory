@@ -31,6 +31,11 @@ public final class NetworkLoader {
             nextId++,
             Side.SERVER);
         INSTANCE.registerMessage(
+            MessageLargeNbtChunkTransfer.Handler.class,
+            MessageLargeNbtChunkTransfer.class,
+            nextId++,
+            Side.SERVER);
+        INSTANCE.registerMessage(
             MessageExportProcessRawMaterials.Handler.class,
             MessageExportProcessRawMaterials.class,
             nextId++,

@@ -290,7 +290,7 @@ MaterialKey 只表达物料身份，不表达数量。
 
 ## 1.4 GraphAnalysisResult
 
-建议结构：
+建议结构（实际实现）：
 
 ```java
 public final class GraphAnalysisResult {
@@ -298,14 +298,17 @@ public final class GraphAnalysisResult {
 
     public final Map<Integer, ProcessNode> nodesById;
 
-    public final Map<Integer, List<ProcessEdge>> outgoingEdgesByNode;
-    public final Map<Integer, List<ProcessEdge>> incomingEdgesByNode;
-
-    public final Map<MaterialKey, List<Integer>> producerNodesByMaterial;
-    public final Map<MaterialKey, List<Integer>> consumerNodesByMaterial;
+    // 注：源码中出/入边索引在 NodeRelationIndex 中，不在 GraphAnalysisResult 顶层
+    public final NodeRelationIndex relationIndex;
+    // relationIndex 包含:
+    //   outgoingEdgesByNode, incomingEdgesByNode,
+    //   directConsumersByNode, directProducersByNode,
+    //   producerNodesByMaterial, consumerNodesByMaterial
 
     public final Map<Integer, Set<MaterialKey>> targetOutputsByNode;
     public final Set<MaterialKey> allTargetOutputs;
+    public final List<Integer> sourceNodeIds;      // 源码 addition
+    public final List<Integer> sinkNodeIds;        // 源码 addition
 
     public final List<CycleInfo> cycles;
     public final Map<Integer, CycleInfo> cycleByNodeId;
@@ -364,6 +367,7 @@ public final class CycleInfo {
     public final int cycleId;
     public final List<Integer> nodeIds;
 
+    public final List<CycleMaterialInfo> candidateMaterials;  // 源码有该字段，设计时未列出
     public final MaterialKey cycleMaterial;
     public final boolean validSingleMaterialCycle;
 
@@ -374,7 +378,7 @@ public final class CycleInfo {
     public final boolean positiveNetOutput;
     public final boolean hasStartupPath;
 
-    public final Set<MaterialKey> requiredStartupMaterials;
+    public final List<MaterialKey> requiredStartupMaterials;  // 源码用 List, 非 Set
 }
 ```
 
@@ -599,18 +603,25 @@ OUTPUT 中再次提交新图：
 
 ---
 
-## 3.2 新增类
+### 3.2 新增类（实际实现状态）
+
+当前源码实现状态：
 
 ```text
-com.nzoth.superfactory.common.process.submit.SubmitPlan
-com.nzoth.superfactory.common.process.submit.SubmitPlanner
-com.nzoth.superfactory.common.process.submit.RequirementDelta
-com.nzoth.superfactory.common.process.submit.StoredQualificationView
+com.nzoth.superfactory.common.process.submit.IntegratedFactoryUnloadHandler  ✅ 已实现
+com.nzoth.superfactory.common.process.submit.SubmitPlan                      ❌ 未实现（逻辑内联于 MTESuperIntegratedFactory）
+com.nzoth.superfactory.common.process.submit.SubmitPlanner                   ❌ 未实现
+com.nzoth.superfactory.common.process.submit.RequirementDelta                ❌ 未实现
+com.nzoth.superfactory.common.process.submit.StoredQualificationView         ❌ 未实现
 ```
+
+提交逻辑通过 `MTESuperIntegratedFactory.submitProcessRequirements()` 和 `applySubmittedProcessPlan()` 直接实现。`deferredRuntimeGraph` + `deferredProcessRequirements` + `deferredGraphAnalysis` 三个字段代替了 SubmitPlan 的设计。
 
 ---
 
-## 3.3 SubmitPlan 结构
+## 3.3 SubmitPlan 结构（设计稿，未实现为独立类）
+
+> **注意**: SubmitPlan 在源码中未作为独立类实现。提交新旧图对比逻辑直接内联在 `MTESuperIntegratedFactory.submitProcessRequirements()` 中。此处保留设计稿供参考。
 
 ```java
 public final class SubmitPlan {

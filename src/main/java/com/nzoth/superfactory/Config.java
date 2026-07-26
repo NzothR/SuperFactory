@@ -23,6 +23,7 @@ public class Config {
     public static boolean debugSuperProxyFactoryRuntime = false;
     public static boolean debugExportIntegratedFactoryInternalBuffer = false;
     public static boolean debugIntegratedFactoryRuntime = false;
+    public static boolean debugIntegratedFactoryNetwork = true;
     public static boolean allowProxyFactoryAsIntegratedRecipeHost = true;
     private static File boundConfigFile;
 
@@ -127,6 +128,11 @@ public class Config {
             Configuration.CATEGORY_GENERAL,
             debugIntegratedFactoryRuntime,
             "Debug only: log Integrated Factory runtime scheduling, input bottlenecks, and waterline throttling.");
+        debugIntegratedFactoryNetwork = configuration.getBoolean(
+            "debugIntegratedFactoryNetwork",
+            Configuration.CATEGORY_GENERAL,
+            debugIntegratedFactoryNetwork,
+            "Debug only: log Integrated Factory network packet transfer for graph sync and process submission.");
         allowProxyFactoryAsIntegratedRecipeHost = configuration.getBoolean(
             "allowProxyFactoryAsIntegratedRecipeHost",
             Configuration.CATEGORY_GENERAL,

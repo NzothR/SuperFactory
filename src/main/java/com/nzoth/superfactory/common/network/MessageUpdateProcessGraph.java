@@ -55,6 +55,12 @@ public final class MessageUpdateProcessGraph implements IMessage {
                 && message.graphTag != null) {
                 factory.readProcessGraphFromClient(message.graphTag);
                 baseTile.markDirty();
+                if (com.nzoth.superfactory.Config.debugIntegratedFactoryNetwork) {
+                    com.nzoth.superfactory.SuperFactory.LOG.info(
+                        "[Super Integrated Factory/Network] MessageUpdateProcessGraph 同步图: nodes={}",
+                        message.graphTag.getTagList("Nodes", net.minecraftforge.common.util.Constants.NBT.TAG_COMPOUND)
+                            .tagCount());
+                }
             }
             return null;
         }

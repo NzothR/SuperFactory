@@ -761,7 +761,34 @@ cycleMaterial 的净输出直接作为目标产物。
 
 ### 19.1 错误
 
-建议错误码：
+**设计建议错误码（本文档为设计稿，源码中的实际错误码以 SccCycleAnalyzer 为准）：**
+
+源码当前已实现的环检查错误码：
+
+```text
+CYCLE_MULTI_MATERIAL
+环中循环物料数量不为 1。
+
+CYCLE_NON_POSITIVE_NET
+循环物料在当前参数下不具备正净输出。
+
+TARGET_CYCLE_MULTIPLE_TARGETS
+目标环包含多个目标节点。
+
+TARGET_CYCLE_TARGET_NOT_INTERNAL_OUTPUT
+目标节点未将循环物料作为环内输出。
+
+TARGET_CYCLE_TARGET_NON_POSITIVE_NET
+目标节点非正净产出循环物料。
+
+TARGET_CYCLE_EXTERNAL_CONSUMER
+目标环的循环物料被环外节点消费。
+
+CYCLE_SHARED_MATERIAL
+多个环共享同一循环物料（当前不支持）。
+```
+
+设计建议扩展的错误码（尚未在源码中实现）：
 
 ```text
 TARGET_DOWNSTREAM_REACHES_ANOTHER_TARGET
@@ -772,21 +799,6 @@ TARGET_PARALLEL_CANNOT_BE_SATISFIED
 
 TARGET_BYPRODUCT_CANNOT_BE_DISPOSED
 目标节点并行降到 1 后，其必要副产处理链仍完全不可行。
-
-MULTIPLE_TARGETS_IN_ONE_CYCLE
-一个环中包含多个目标节点。
-
-TARGET_CYCLE_NODE_NOT_AT_START
-含目标节点的环中，目标节点不是 cycleMaterial 生产起点。
-
-CYCLE_MATERIAL_HAS_EXTERNAL_CONSUMER
-含目标节点的环中，cycleMaterial 被环外节点消费。
-
-MULTIPLE_CYCLE_MATERIALS
-一个 SCC 中存在多个循环物料。
-
-CYCLE_NET_OUTPUT_NOT_POSITIVE
-环在当前参数下不具备正净输出。
 
 UNSUPPORTED_TARGET_CROSS_REGION
 多个目标节点之间存在无法分离的目标交叉区域。

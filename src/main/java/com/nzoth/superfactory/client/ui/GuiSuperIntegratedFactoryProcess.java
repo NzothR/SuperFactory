@@ -30,6 +30,7 @@ import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
 
 import com.gtnewhorizons.modularui.api.forge.ItemStackHandler;
+import com.nzoth.superfactory.Config;
 import com.nzoth.superfactory.SuperFactory;
 import com.nzoth.superfactory.common.mte.MTESuperIntegratedFactory;
 import com.nzoth.superfactory.common.network.LargeNbtSplitter;
@@ -4356,6 +4357,10 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         analyzeAndBackfillCycleMaterials(result.nodes);
         if (factory.getBaseMetaTileEntity() != null) {
             syncGraph();
+            if (Config.debugIntegratedFactoryNetwork) {
+                SuperFactory.LOG.info(
+                    "[Super Integrated Factory/Network] 客户端提交工序需求: type=SUBMIT_PROCESS_REQUIREMENTS");
+            }
             LargeNbtSplitter.send(
                 factory.getBaseMetaTileEntity(),
                 result.requirements.writeToNBT(),
@@ -6848,6 +6853,11 @@ public final class GuiSuperIntegratedFactoryProcess extends AbstractProcessCanva
         cachedClientGraphEdgeCount = -1;
         if (factory.getBaseMetaTileEntity() != null) {
             NBTTagCompound graphTag = graph.writeToNBT();
+            if (Config.debugIntegratedFactoryNetwork) {
+                SuperFactory.LOG.info(
+                    "[Super Integrated Factory/Network] 客户端同步工序图: type=UPDATE_PROCESS_GRAPH, nodes={}, edges={}",
+                    graph.nodes.size(), graph.edges.size());
+            }
             LargeNbtSplitter.send(
                 factory.getBaseMetaTileEntity(),
                 graphTag,

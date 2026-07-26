@@ -946,9 +946,19 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
     public void readProcessGraphFromClient(NBTTagCompound graphTag) {
         processGraph.readFromNBT(graphTag);
         getBaseMetaTileEntity().markDirty();
+        if (Config.debugIntegratedFactoryNetwork) {
+            SuperFactory.LOG.info(
+                "[Super Integrated Factory/Network] 收到工序图同步: nodes={}, edges={}",
+                processGraph.nodes.size(), processGraph.edges.size());
+        }
     }
 
     public void submitProcessRequirements(NBTTagCompound requirementsTag) {
+        if (Config.debugIntegratedFactoryNetwork) {
+            SuperFactory.LOG.info(
+                "[Super Integrated Factory/Network] 收到工序提交请求: mode={}, nodes={}",
+                factoryMode, processGraph.nodes.size());
+        }
         ProcessRequirements incoming = new ProcessRequirements();
         incoming.readFromNBT(requirementsTag);
         if (hasLockedComponentWithoutTarget(processGraph)) {
@@ -973,12 +983,22 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             deferredGraphAnalysis = submittedAnalysis;
             hasDeferredRuntimeGraph = true;
             getBaseMetaTileEntity().markDirty();
+            if (Config.debugIntegratedFactoryNetwork) {
+                SuperFactory.LOG.info(
+                    "[Super Integrated Factory/Network] 工序图延迟提交(当前处于OUTPUT): nodes={}",
+                    submittedGraph.nodes.size());
+            }
             return;
         }
         applySubmittedProcessPlan(incoming, submittedGraph, submittedAnalysis);
         factoryMode = MODE_OUTPUT;
         ioCycleTicks = 0;
         getBaseMetaTileEntity().markDirty();
+        if (Config.debugIntegratedFactoryNetwork) {
+            SuperFactory.LOG.info(
+                "[Super Integrated Factory/Network] 工序提交成功，进入 OUTPUT: submittedNodes={}",
+                submittedGraph.nodes.size());
+        }
     }
 
     private void rejectSubmittedProcessGraph(GraphAnalysisResult submittedAnalysis) {

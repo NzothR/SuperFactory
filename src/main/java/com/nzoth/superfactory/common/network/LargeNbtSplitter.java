@@ -29,6 +29,8 @@ public final class LargeNbtSplitter {
             }
             compressed = raw.toByteArray();
         } catch (java.io.IOException impossible) {
+            com.nzoth.superfactory.SuperFactory.LOG.error(
+                "[Super Integrated Factory/Network] NBT 压缩失败: transferType={}", transferType, impossible);
             return;
         }
         int total = Math.max(1, (compressed.length + MAX_PAYLOAD_BYTES - 1) / MAX_PAYLOAD_BYTES);
@@ -36,6 +38,12 @@ public final class LargeNbtSplitter {
         int x = baseTile.getXCoord();
         int y = baseTile.getYCoord();
         int z = baseTile.getZCoord();
+        boolean debug = com.nzoth.superfactory.Config.debugIntegratedFactoryNetwork;
+        if (debug) {
+            com.nzoth.superfactory.SuperFactory.LOG.info(
+                "[Super Integrated Factory/Network] 发送分块传输: transferId={}, type={}, totalChunks={}, compressedBytes={}",
+                transferId, transferType, total, compressed.length);
+        }
         for (int i = 0; i < total; i++) {
             int start = i * MAX_PAYLOAD_BYTES;
             int end = Math.min(compressed.length, start + MAX_PAYLOAD_BYTES);

@@ -2368,6 +2368,7 @@ public class MTESuperIntegratedFactory extends TTMultiblockBase implements ISurv
             snapshot.captureLiveFluids(normalizeLiveFluidRefs(getStoredFluids()));
             snapshot.captureDualInputs();
             snapshot.captureIncomingWithinLookahead();
+            snapshot.buildIndexes();
             return snapshot;
         } finally {
             endRecipeProcessing();

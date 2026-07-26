@@ -34,9 +34,18 @@ public final class RuntimeResourceSnapshot {
     private final Map<String, int[]> oreIdCache = new LinkedHashMap<>();
     private final Map<String, Boolean> itemMatchCache = new LinkedHashMap<>();
 
+    // P1 optimisation: MaterialKey -> amount indexes to avoid O(n) list scans
+    private final Map<MaterialKey, Long> internalItemAmountByKey = new LinkedHashMap<>();
+    private final Map<MaterialKey, Long> internalFluidAmountByKey = new LinkedHashMap<>();
+    private final Map<MaterialKey, Long> incomingItemAmountByKey = new LinkedHashMap<>();
+    private final Map<MaterialKey, Long> incomingFluidAmountByKey = new LinkedHashMap<>();
+    private boolean indexesBuilt;
+
     public RuntimeResourceSnapshot(Context context) {
         this.context = context;
     }
+
+    // ---- capture ----
 
     public void captureInternalItems(List<BufferedItemStack> source) {
         for (BufferedItemStack entry : source) {
@@ -103,14 +112,6 @@ public final class RuntimeResourceSnapshot {
         }
     }
 
-    public long internalItemAmount(ItemStack template) {
-        return countItemInBuffer(internalItemView, template);
-    }
-
-    public long internalFluidAmount(FluidStack template) {
-        return countFluidInBuffer(internalFluidView, template);
-    }
-
     public void captureIncomingWithinLookahead() {
         int lookahead = Math.max(0, Config.superIntegratedFactoryLookaheadTicks);
         if (lookahead <= 0) {
@@ -126,6 +127,70 @@ public final class RuntimeResourceSnapshot {
             }
             captureProjectedOutputs(node, job.parallel);
         }
+    }
+
+    /**
+     * Build lookup indexes for MaterialKey-based queries after all capture
+     * methods have been called. This is called once per tick after capture.
+     */
+    public void buildIndexes() {
+        internalItemAmountByKey.clear();
+        internalFluidAmountByKey.clear();
+        incomingItemAmountByKey.clear();
+        incomingFluidAmountByKey.clear();
+        for (BufferedItemStack entry : internalItemView) {
+            if (entry != null && entry.stack != null && entry.amount > 0L) {
+                MaterialKey key = context.materialKeyOf(entry.stack);
+                if (key != null) {
+                    addToIndex(internalItemAmountByKey, key, entry.amount);
+                }
+            }
+        }
+        for (BufferedFluidStack entry : internalFluidView) {
+            if (entry != null && entry.fluidStack != null && entry.amount > 0L) {
+                MaterialKey key = MaterialKey.ofFluid(entry.fluidStack);
+                if (key != null) {
+                    addToIndex(internalFluidAmountByKey, key, entry.amount);
+                }
+            }
+        }
+        for (BufferedItemStack entry : incomingItemWithinLookahead) {
+            if (entry != null && entry.stack != null && entry.amount > 0L) {
+                MaterialKey key = context.materialKeyOf(entry.stack);
+                if (key != null) {
+                    addToIndex(incomingItemAmountByKey, key, entry.amount);
+                }
+            }
+        }
+        for (BufferedFluidStack entry : incomingFluidWithinLookahead) {
+            if (entry != null && entry.fluidStack != null && entry.amount > 0L) {
+                MaterialKey key = MaterialKey.ofFluid(entry.fluidStack);
+                if (key != null) {
+                    addToIndex(incomingFluidAmountByKey, key, entry.amount);
+                }
+            }
+        }
+        indexesBuilt = true;
+    }
+
+    // ---- query (indexed when possible, falls back to list scan) ----
+
+    public long internalItemAmount(ItemStack template) {
+        MaterialKey key = context.materialKeyOf(template);
+        if (key != null && indexesBuilt) {
+            Long cached = internalItemAmountByKey.get(key);
+            if (cached != null) return cached;
+        }
+        return countItemInBuffer(internalItemView, template);
+    }
+
+    public long internalFluidAmount(FluidStack template) {
+        MaterialKey key = MaterialKey.ofFluid(template);
+        if (key != null && indexesBuilt) {
+            Long cached = internalFluidAmountByKey.get(key);
+            if (cached != null) return cached;
+        }
+        return countFluidInBuffer(internalFluidView, template);
     }
 
     public long projectedItemAmount(ItemStack template) {
@@ -148,6 +213,8 @@ public final class RuntimeResourceSnapshot {
             countFluidInBuffer(dualFluidView, template));
     }
 
+    // ---- live / dual buffer lists (still needed for itemMatches / oreDict lookups) ----
+
     public List<BufferedItemStack> liveItemView() {
         return liveItemView;
     }
@@ -155,6 +222,8 @@ public final class RuntimeResourceSnapshot {
     public List<BufferedFluidStack> liveFluidView() {
         return liveFluidView;
     }
+
+    // ---- ore-dict / item-match caches ----
 
     public int[] oreIds(ItemStack stack) {
         if (stack == null) {
@@ -182,6 +251,8 @@ public final class RuntimeResourceSnapshot {
         itemMatchCache.put(key, matched);
         return matched;
     }
+
+    // ---- internal helpers ----
 
     private void captureProjectedOutputs(ProcessNode node, int parallel) {
         for (int slot = 0; slot < node.outputHandler.getSlots(); slot++) {
@@ -222,6 +293,13 @@ public final class RuntimeResourceSnapshot {
             : Math.max(0L, stored - state.reserve);
     }
 
+    private static void addToIndex(Map<MaterialKey, Long> index, MaterialKey key, long amount) {
+        Long existing = index.get(key);
+        index.put(key, existing == null ? amount : safeAddLong(existing, amount));
+    }
+
+    // ---- list-based buffer operations (used for fallback and non-indexed views) ----
+
     private static void addItemToBuffer(List<BufferedItemStack> buffer, ItemStack stack, long amount) {
         if (stack == null || amount <= 0L) {
             return;
@@ -248,7 +326,7 @@ public final class RuntimeResourceSnapshot {
         buffer.add(new BufferedFluidStack(stack, amount));
     }
 
-    private static long countItemInBuffer(List<BufferedItemStack> buffer, ItemStack template) {
+    static long countItemInBuffer(List<BufferedItemStack> buffer, ItemStack template) {
         long total = 0L;
         for (BufferedItemStack entry : buffer) {
             if (entry != null && entry.stack != null && GTUtility.areStacksEqual(entry.stack, template, true)) {
@@ -258,7 +336,7 @@ public final class RuntimeResourceSnapshot {
         return total;
     }
 
-    private static long countFluidInBuffer(List<BufferedFluidStack> buffer, FluidStack template) {
+    static long countFluidInBuffer(List<BufferedFluidStack> buffer, FluidStack template) {
         if (template == null) {
             return 0L;
         }
@@ -271,13 +349,15 @@ public final class RuntimeResourceSnapshot {
         return total;
     }
 
-    private static String itemBufferKey(ItemStack stack) {
+    static String itemBufferKey(ItemStack stack) {
         if (stack == null || stack.getItem() == null) {
             return "item:null";
         }
         String itemName = net.minecraft.item.Item.itemRegistry.getNameForObject(stack.getItem());
         return "item:" + itemName + ":" + stack.getItemDamage();
     }
+
+    // ---- arithmetic ----
 
     private static long safeAddLong(long left, long right) {
         if (right > 0L && left > Long.MAX_VALUE - right) {

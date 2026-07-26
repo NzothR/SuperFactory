@@ -2,6 +2,7 @@ package com.nzoth.superfactory.common.process.schedule;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.List;
 
 import com.nzoth.superfactory.common.process.ProcessNode;
@@ -10,12 +11,30 @@ public final class IntegratedFactoryScheduler {
 
     private IntegratedFactoryScheduler() {}
 
+    /**
+     * Per-tick scheduling entry point.
+     * <p>
+     * Optimized: builds all candidate buckets in ONE pass over the scheduling order,
+     * then tries to start nodes layer by layer. Previously each CandidateLayer
+     * triggered a full node scan (5× for 5 layers); now it's 1×.
+     */
     public static int schedule(Context context, boolean debugRuntime) {
         context.updateRunCredits();
+
+        // Phase 1: one scan, classify each node once, bucket by layer.
+        EnumMap<CandidateLayer, ArrayList<NodeCandidate>> buckets = buildCandidateBuckets(context, debugRuntime);
+
+        // Phase 2: try to start candidates layer-by-layer.
         int starts = 0;
+        int maxStarts = context.maxNodeStartsPerTick();
         for (CandidateLayer layer : CandidateLayer.values()) {
-            for (NodeCandidate candidate : buildNodeCandidates(context, layer, debugRuntime)) {
-                if (starts >= context.maxNodeStartsPerTick()) {
+            List<NodeCandidate> candidates = buckets.get(layer);
+            if (candidates.isEmpty()) {
+                continue;
+            }
+            candidates.sort(CANDIDATE_ORDER);
+            for (NodeCandidate candidate : candidates) {
+                if (starts >= maxStarts) {
                     return starts;
                 }
                 if (context.tryStartNodeCandidate(candidate, debugRuntime)) {
@@ -27,9 +46,42 @@ public final class IntegratedFactoryScheduler {
         return starts;
     }
 
-    private static List<NodeCandidate> buildNodeCandidates(Context context, CandidateLayer layer,
+    /**
+     * Single-pass node analysis.
+     * <p>
+     * Every node is inspected once per tick. The layer classification,
+     * runnable-parallel, output-throttle, and credit fields are computed
+     * exactly once and then discarded after this tick.
+     */
+    static final class TickNodeAnalysis {
+
+        final ProcessNode node;
+        final CandidateLayer layer;
+        final int runnableParallel;
+        final double runCredit;
+        final int targetDistance;
+
+        TickNodeAnalysis(ProcessNode node, CandidateLayer layer, int runnableParallel, double runCredit,
+            int targetDistance) {
+            this.node = node;
+            this.layer = layer;
+            this.runnableParallel = runnableParallel;
+            this.runCredit = runCredit;
+            this.targetDistance = targetDistance;
+        }
+
+        NodeCandidate toCandidate() {
+            return new NodeCandidate(node, runnableParallel, layer, runCredit, targetDistance);
+        }
+    }
+
+    private static EnumMap<CandidateLayer, ArrayList<NodeCandidate>> buildCandidateBuckets(Context context,
         boolean debugRuntime) {
-        ArrayList<NodeCandidate> candidates = new ArrayList<>();
+        EnumMap<CandidateLayer, ArrayList<NodeCandidate>> buckets = new EnumMap<>(CandidateLayer.class);
+        for (CandidateLayer layer : CandidateLayer.values()) {
+            buckets.put(layer, new ArrayList<>());
+        }
+
         for (ProcessNode node : context.schedulingOrder()) {
             if (context.runningJobsForNode(node.id) > 0) {
                 continue;
@@ -39,29 +91,24 @@ public final class IntegratedFactoryScheduler {
             if (!node.locked || effectiveParallelLimit <= 0 || effectiveDurationTicks <= 0) {
                 continue;
             }
-            if (classifyCandidateLayer(context, node) != layer
-                || context.isExternalOutputThrottled(node, effectiveParallelLimit, debugRuntime)) {
+            CandidateLayer layer = classifyCandidateLayer(context, node);
+            if (context.isExternalOutputThrottled(node, effectiveParallelLimit, debugRuntime)) {
                 continue;
             }
             int parallel = context.runnableParallel(node, effectiveParallelLimit, debugRuntime);
-            if (parallel > 0) {
-                candidates.add(
-                    new NodeCandidate(
-                        node,
-                        parallel,
-                        layer,
-                        context.runCredit(node.id),
-                        context.distanceToTerminal(node)));
+            if (parallel <= 0) {
+                continue;
             }
+            int distance = context.distanceToTerminal(node);
+            double credit = context.runCredit(node.id);
+            buckets.get(layer)
+                .add(new NodeCandidate(node, parallel, layer, credit, distance));
         }
-        candidates.sort(
-            Comparator.comparingDouble((NodeCandidate candidate) -> -candidate.runCredit)
-                .thenComparingInt(candidate -> candidate.targetDistance)
-                .thenComparingInt(candidate -> candidate.node.id));
-        return candidates;
+        return buckets;
     }
 
-    private static CandidateLayer classifyCandidateLayer(Context context, ProcessNode node) {
+    // Visible for testing
+    static CandidateLayer classifyCandidateLayer(Context context, ProcessNode node) {
         if (context.consumesAvailableInternalInput(node)) {
             return CandidateLayer.INTERNAL_CONSUME;
         }
@@ -73,6 +120,11 @@ public final class IntegratedFactoryScheduler {
         }
         return CandidateLayer.SOURCE_PRODUCTION;
     }
+
+    private static final Comparator<NodeCandidate> CANDIDATE_ORDER = Comparator
+        .comparingDouble((NodeCandidate c) -> -c.runCredit)
+        .thenComparingInt(c -> c.targetDistance)
+        .thenComparingInt(c -> c.node.id);
 
     public interface Context {
 

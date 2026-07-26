@@ -1,8 +1,5 @@
 package com.nzoth.superfactory.common.process.watermark;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-
 import net.minecraft.item.ItemStack;
 import net.minecraftforge.fluids.FluidStack;
 
@@ -15,53 +12,6 @@ import gregtech.api.util.GTUtility;
 public final class IntegratedFactoryWatermarks {
 
     private IntegratedFactoryWatermarks() {}
-
-    /**
-     * Pre-compiled watermark info that is rebuilt when the graph or node parameters
-     * change, and read on every tick for O(1) low-water queries.
-     */
-    public static final class CompiledWatermarkInfo {
-
-        /** key: (producerNodeId << 32) | materialHash, value: lowWater */
-        final Map<Long, Long> internalItemLowWaterCache = new LinkedHashMap<>();
-
-        final Map<Long, Long> internalFluidLowWaterCache = new LinkedHashMap<>();
-        final Map<Long, Long> externalItemLowWaterCache = new LinkedHashMap<>();
-        final Map<Long, Long> externalFluidLowWaterCache = new LinkedHashMap<>();
-
-        long compoundKey(int nodeId, Object material) {
-            return ((long) nodeId << 32) | (material.hashCode() & 0xFFFFFFFFL);
-        }
-
-        public long internalItemLowWater(int producerId, ItemStack output) {
-            Long cached = internalItemLowWaterCache.get(compoundKey(producerId, output));
-            return cached == null ? 1L : cached;
-        }
-
-        public long internalFluidLowWater(int producerId, FluidStack output) {
-            Long cached = internalFluidLowWaterCache.get(compoundKey(producerId, output));
-            return cached == null ? 1L : cached;
-        }
-
-        public long externalItemLowWater(int producerId, ItemStack output) {
-            Long cached = externalItemLowWaterCache.get(compoundKey(producerId, output));
-            return cached == null ? 1L : cached;
-        }
-
-        public long externalFluidLowWater(int producerId, FluidStack output) {
-            Long cached = externalFluidLowWaterCache.get(compoundKey(producerId, output));
-            return cached == null ? 1L : cached;
-        }
-
-        public void clear() {
-            internalItemLowWaterCache.clear();
-            internalFluidLowWaterCache.clear();
-            externalItemLowWaterCache.clear();
-            externalFluidLowWaterCache.clear();
-        }
-    }
-
-    // ---- runtime computation (called when rebuilding compiled info) ----
 
     public static long internalItemLowWater(Context context, ProcessNode producer, ItemStack output, long batchAmount) {
         long lowWater = Math
@@ -76,7 +26,8 @@ public final class IntegratedFactoryWatermarks {
             }
             for (int slot = 0; slot < consumer.inputHandler.getSlots(); slot++) {
                 ItemStack input = consumer.inputHandler.getStackInSlot(slot);
-                if (input != null && !isFluidDisplay(input) && context.itemMatches(input, output)) {
+                if (input != null && GTUtility.getFluidFromDisplayStack(input) == null
+                    && context.itemMatches(input, output)) {
                     lowWater = Math.max(
                         lowWater,
                         ProcessRuntimeMath
@@ -134,10 +85,6 @@ public final class IntegratedFactoryWatermarks {
 
     public static long waterlineDuration(Context context, ProcessNode producer) {
         return Math.max(1L, context.effectiveDurationTicks(producer));
-    }
-
-    private static boolean isFluidDisplay(ItemStack stack) {
-        return GTUtility.getFluidFromDisplayStack(stack) != null;
     }
 
     public interface Context {

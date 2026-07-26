@@ -29,7 +29,7 @@ public final class IntegratedFactoryScheduler {
         int maxStarts = context.maxNodeStartsPerTick();
         for (CandidateLayer layer : CandidateLayer.values()) {
             List<NodeCandidate> candidates = buckets.get(layer);
-            if (candidates.isEmpty()) {
+            if (candidates == null || candidates.isEmpty()) {
                 continue;
             }
             candidates.sort(CANDIDATE_ORDER);
@@ -46,35 +46,6 @@ public final class IntegratedFactoryScheduler {
         return starts;
     }
 
-    /**
-     * Single-pass node analysis.
-     * <p>
-     * Every node is inspected once per tick. The layer classification,
-     * runnable-parallel, output-throttle, and credit fields are computed
-     * exactly once and then discarded after this tick.
-     */
-    static final class TickNodeAnalysis {
-
-        final ProcessNode node;
-        final CandidateLayer layer;
-        final int runnableParallel;
-        final double runCredit;
-        final int targetDistance;
-
-        TickNodeAnalysis(ProcessNode node, CandidateLayer layer, int runnableParallel, double runCredit,
-            int targetDistance) {
-            this.node = node;
-            this.layer = layer;
-            this.runnableParallel = runnableParallel;
-            this.runCredit = runCredit;
-            this.targetDistance = targetDistance;
-        }
-
-        NodeCandidate toCandidate() {
-            return new NodeCandidate(node, runnableParallel, layer, runCredit, targetDistance);
-        }
-    }
-
     private static EnumMap<CandidateLayer, ArrayList<NodeCandidate>> buildCandidateBuckets(Context context,
         boolean debugRuntime) {
         EnumMap<CandidateLayer, ArrayList<NodeCandidate>> buckets = new EnumMap<>(CandidateLayer.class);
@@ -86,9 +57,12 @@ public final class IntegratedFactoryScheduler {
             if (context.runningJobsForNode(node.id) > 0) {
                 continue;
             }
+            if (!node.locked) {
+                continue;
+            }
             int effectiveParallelLimit = context.effectiveParallelLimit(node);
             int effectiveDurationTicks = context.effectiveDurationTicks(node);
-            if (!node.locked || effectiveParallelLimit <= 0 || effectiveDurationTicks <= 0) {
+            if (effectiveParallelLimit <= 0 || effectiveDurationTicks <= 0) {
                 continue;
             }
             CandidateLayer layer = classifyCandidateLayer(context, node);
@@ -107,8 +81,7 @@ public final class IntegratedFactoryScheduler {
         return buckets;
     }
 
-    // Visible for testing
-    static CandidateLayer classifyCandidateLayer(Context context, ProcessNode node) {
+    private static CandidateLayer classifyCandidateLayer(Context context, ProcessNode node) {
         if (context.consumesAvailableInternalInput(node)) {
             return CandidateLayer.INTERNAL_CONSUME;
         }

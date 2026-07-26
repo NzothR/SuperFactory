@@ -23,34 +23,32 @@ import gregtech.common.tileentities.machines.IDualInputInventory;
 public final class RuntimeResourceSnapshot {
 
     private final Context context;
-    private final List<BufferedItemStack> internalItemView = new ArrayList<>();
-    private final List<BufferedFluidStack> internalFluidView = new ArrayList<>();
-    private final List<BufferedItemStack> liveItemView = new ArrayList<>();
-    private final List<BufferedFluidStack> liveFluidView = new ArrayList<>();
-    private final List<BufferedItemStack> dualItemView = new ArrayList<>();
-    private final List<BufferedFluidStack> dualFluidView = new ArrayList<>();
-    private final List<BufferedItemStack> incomingItemWithinLookahead = new ArrayList<>();
-    private final List<BufferedFluidStack> incomingFluidWithinLookahead = new ArrayList<>();
-    private final Map<String, int[]> oreIdCache = new LinkedHashMap<>();
-    private final Map<String, Boolean> itemMatchCache = new LinkedHashMap<>();
-
-    // P1 optimisation: MaterialKey -> amount indexes to avoid O(n) list scans
+    // Primary indexed storage for internal/incoming buffers (O(1) lookup via MaterialKey)
     private final Map<MaterialKey, Long> internalItemAmountByKey = new LinkedHashMap<>();
     private final Map<MaterialKey, Long> internalFluidAmountByKey = new LinkedHashMap<>();
     private final Map<MaterialKey, Long> incomingItemAmountByKey = new LinkedHashMap<>();
     private final Map<MaterialKey, Long> incomingFluidAmountByKey = new LinkedHashMap<>();
-    private boolean indexesBuilt;
+    // List-based views retained only for domains that need item-level iteration (OreDict/match fallbacks)
+    private final List<BufferedItemStack> liveItemView = new ArrayList<>();
+    private final List<BufferedFluidStack> liveFluidView = new ArrayList<>();
+    private final List<BufferedItemStack> dualItemView = new ArrayList<>();
+    private final List<BufferedFluidStack> dualFluidView = new ArrayList<>();
+    private final Map<String, int[]> oreIdCache = new LinkedHashMap<>();
+    private final Map<String, Boolean> itemMatchCache = new LinkedHashMap<>();
 
     public RuntimeResourceSnapshot(Context context) {
         this.context = context;
     }
 
-    // ---- capture ----
+    // ---- capture (indexed storage built incrementally — no explicit buildIndexes needed) ----
 
     public void captureInternalItems(List<BufferedItemStack> source) {
         for (BufferedItemStack entry : source) {
             if (entry != null && entry.stack != null && entry.amount > 0L) {
-                addItemToBuffer(internalItemView, entry.stack, entry.amount);
+                MaterialKey key = context.materialKeyOf(entry.stack);
+                if (key != null) {
+                    addToIndex(internalItemAmountByKey, key, entry.amount);
+                }
             }
         }
     }
@@ -58,7 +56,10 @@ public final class RuntimeResourceSnapshot {
     public void captureInternalFluids(List<BufferedFluidStack> source) {
         for (BufferedFluidStack entry : source) {
             if (entry != null && entry.fluidStack != null && entry.amount > 0L) {
-                addFluidToBuffer(internalFluidView, entry.fluidStack, entry.amount);
+                MaterialKey key = MaterialKey.ofFluid(entry.fluidStack);
+                if (key != null) {
+                    addToIndex(internalFluidAmountByKey, key, entry.amount);
+                }
             }
         }
     }
@@ -66,7 +67,7 @@ public final class RuntimeResourceSnapshot {
     public void captureLiveItems(ItemStack[] stacks) {
         for (ItemStack stack : stacks) {
             if (stack != null && stack.stackSize > 0) {
-                addItemToBuffer(liveItemView, stack, stack.stackSize);
+                ProcessBufferUtil.addItem(liveItemView, stack, stack.stackSize, GTUtility::areStacksEqual);
             }
         }
     }
@@ -74,7 +75,7 @@ public final class RuntimeResourceSnapshot {
     public void captureLiveFluids(FluidStack[] fluids) {
         for (FluidStack stack : fluids) {
             if (stack != null && stack.amount > 0) {
-                addFluidToBuffer(liveFluidView, stack, stack.amount);
+                ProcessBufferUtil.addFluid(liveFluidView, stack, stack.amount);
             }
         }
     }
@@ -93,7 +94,7 @@ public final class RuntimeResourceSnapshot {
                 if (items != null) {
                     for (ItemStack stack : items) {
                         if (stack != null && stack.stackSize > 0) {
-                            addItemToBuffer(dualItemView, stack, stack.stackSize);
+                            ProcessBufferUtil.addItem(dualItemView, stack, stack.stackSize, GTUtility::areStacksEqual);
                         }
                     }
                 }
@@ -104,7 +105,7 @@ public final class RuntimeResourceSnapshot {
                 if (fluids != null) {
                     for (FluidStack stack : fluids) {
                         if (stack != null && stack.amount > 0) {
-                            addFluidToBuffer(dualFluidView, stack, stack.amount);
+                            ProcessBufferUtil.addFluid(dualFluidView, stack, stack.amount);
                         }
                     }
                 }
@@ -129,91 +130,67 @@ public final class RuntimeResourceSnapshot {
         }
     }
 
-    /**
-     * Build lookup indexes for MaterialKey-based queries after all capture
-     * methods have been called. This is called once per tick after capture.
-     */
-    public void buildIndexes() {
-        internalItemAmountByKey.clear();
-        internalFluidAmountByKey.clear();
-        incomingItemAmountByKey.clear();
-        incomingFluidAmountByKey.clear();
-        for (BufferedItemStack entry : internalItemView) {
-            if (entry != null && entry.stack != null && entry.amount > 0L) {
-                MaterialKey key = context.materialKeyOf(entry.stack);
-                if (key != null) {
-                    addToIndex(internalItemAmountByKey, key, entry.amount);
-                }
-            }
-        }
-        for (BufferedFluidStack entry : internalFluidView) {
-            if (entry != null && entry.fluidStack != null && entry.amount > 0L) {
-                MaterialKey key = MaterialKey.ofFluid(entry.fluidStack);
-                if (key != null) {
-                    addToIndex(internalFluidAmountByKey, key, entry.amount);
-                }
-            }
-        }
-        for (BufferedItemStack entry : incomingItemWithinLookahead) {
-            if (entry != null && entry.stack != null && entry.amount > 0L) {
-                MaterialKey key = context.materialKeyOf(entry.stack);
-                if (key != null) {
-                    addToIndex(incomingItemAmountByKey, key, entry.amount);
-                }
-            }
-        }
-        for (BufferedFluidStack entry : incomingFluidWithinLookahead) {
-            if (entry != null && entry.fluidStack != null && entry.amount > 0L) {
-                MaterialKey key = MaterialKey.ofFluid(entry.fluidStack);
-                if (key != null) {
-                    addToIndex(incomingFluidAmountByKey, key, entry.amount);
-                }
-            }
-        }
-        indexesBuilt = true;
-    }
-
-    // ---- query (indexed when possible, falls back to list scan) ----
+    // ---- query ----
 
     public long internalItemAmount(ItemStack template) {
         MaterialKey key = context.materialKeyOf(template);
-        if (key != null && indexesBuilt) {
+        if (key != null) {
             Long cached = internalItemAmountByKey.get(key);
             if (cached != null) return cached;
         }
-        return countItemInBuffer(internalItemView, template);
+        return 0L;
     }
 
     public long internalFluidAmount(FluidStack template) {
         MaterialKey key = MaterialKey.ofFluid(template);
-        if (key != null && indexesBuilt) {
+        if (key != null) {
             Long cached = internalFluidAmountByKey.get(key);
             if (cached != null) return cached;
         }
-        return countFluidInBuffer(internalFluidView, template);
+        return 0L;
     }
 
     public long projectedItemAmount(ItemStack template) {
-        return safeAddLong(internalItemAmount(template), countItemInBuffer(incomingItemWithinLookahead, template));
+        return ProcessRuntimeMath.safeAdd(internalItemAmount(template), incomingItemAmount(template));
     }
 
     public long projectedFluidAmount(FluidStack template) {
-        return safeAddLong(internalFluidAmount(template), countFluidInBuffer(incomingFluidWithinLookahead, template));
+        return ProcessRuntimeMath.safeAdd(internalFluidAmount(template), incomingFluidAmount(template));
     }
 
     public long itemAmount(ProcessNode consumer, ItemStack template) {
-        return safeAddLong(
-            safeAddLong(consumableInternalItemAmount(consumer, template), countItemInBuffer(liveItemView, template)),
-            countItemInBuffer(dualItemView, template));
+        return ProcessRuntimeMath.safeAdd(
+            ProcessRuntimeMath.safeAdd(consumableInternalItemAmount(consumer, template), liveItemAmount(template)),
+            dualItemAmount(template));
     }
 
     public long fluidAmount(ProcessNode consumer, FluidStack template) {
-        return safeAddLong(
-            safeAddLong(consumableInternalFluidAmount(consumer, template), countFluidInBuffer(liveFluidView, template)),
-            countFluidInBuffer(dualFluidView, template));
+        return ProcessRuntimeMath.safeAdd(
+            ProcessRuntimeMath.safeAdd(consumableInternalFluidAmount(consumer, template), liveFluidAmount(template)),
+            dualFluidAmount(template));
     }
 
-    // ---- live / dual buffer lists (still needed for itemMatches / oreDict lookups) ----
+    // ---- incoming index queries ----
+
+    private long incomingItemAmount(ItemStack template) {
+        MaterialKey key = context.materialKeyOf(template);
+        if (key != null) {
+            Long cached = incomingItemAmountByKey.get(key);
+            if (cached != null) return cached;
+        }
+        return 0L;
+    }
+
+    private long incomingFluidAmount(FluidStack template) {
+        MaterialKey key = MaterialKey.ofFluid(template);
+        if (key != null) {
+            Long cached = incomingFluidAmountByKey.get(key);
+            if (cached != null) return cached;
+        }
+        return 0L;
+    }
+
+    // ---- live / dual list views (needed for itemMatches/oreDict lookups) ----
 
     public List<BufferedItemStack> liveItemView() {
         return liveItemView;
@@ -221,6 +198,22 @@ public final class RuntimeResourceSnapshot {
 
     public List<BufferedFluidStack> liveFluidView() {
         return liveFluidView;
+    }
+
+    private long liveItemAmount(ItemStack template) {
+        return ProcessBufferUtil.countItem(liveItemView, template, GTUtility::areStacksEqual);
+    }
+
+    private long liveFluidAmount(FluidStack template) {
+        return ProcessBufferUtil.countFluid(liveFluidView, template);
+    }
+
+    private long dualItemAmount(ItemStack template) {
+        return ProcessBufferUtil.countItem(dualItemView, template, GTUtility::areStacksEqual);
+    }
+
+    private long dualFluidAmount(FluidStack template) {
+        return ProcessBufferUtil.countFluid(dualFluidView, template);
     }
 
     // ---- ore-dict / item-match caches ----
@@ -262,18 +255,21 @@ public final class RuntimeResourceSnapshot {
             }
             FluidStack fluid = GTUtility.getFluidFromDisplayStack(output);
             if (fluid != null) {
-                addFluidToBuffer(
-                    incomingFluidWithinLookahead,
-                    fluid,
-                    safeMultiply(Math.max(1L, context.getStackAmount(output)), Math.max(1L, parallel)));
+                long amount = ProcessRuntimeMath
+                    .safeMultiply(Math.max(1L, context.getStackAmount(output)), Math.max(1L, parallel));
+                MaterialKey key = MaterialKey.ofFluid(fluid);
+                if (key != null) {
+                    addToIndex(incomingFluidAmountByKey, key, amount);
+                }
             } else {
                 long rolls = ParallelHelper
                     .calculateIntegralChancedOutputMultiplier(node.getOutputChance(slot), Math.max(1, parallel));
                 if (rolls > 0L) {
-                    addItemToBuffer(
-                        incomingItemWithinLookahead,
-                        output,
-                        safeMultiply(context.getStackAmount(output), rolls));
+                    long amount = ProcessRuntimeMath.safeMultiply(context.getStackAmount(output), rolls);
+                    MaterialKey key = context.materialKeyOf(output);
+                    if (key != null) {
+                        addToIndex(incomingItemAmountByKey, key, amount);
+                    }
                 }
             }
         }
@@ -295,59 +291,10 @@ public final class RuntimeResourceSnapshot {
 
     private static void addToIndex(Map<MaterialKey, Long> index, MaterialKey key, long amount) {
         Long existing = index.get(key);
-        index.put(key, existing == null ? amount : safeAddLong(existing, amount));
+        index.put(key, existing == null ? amount : ProcessRuntimeMath.safeAdd(existing, amount));
     }
 
-    // ---- list-based buffer operations (used for fallback and non-indexed views) ----
-
-    private static void addItemToBuffer(List<BufferedItemStack> buffer, ItemStack stack, long amount) {
-        if (stack == null || amount <= 0L) {
-            return;
-        }
-        for (BufferedItemStack entry : buffer) {
-            if (entry != null && entry.stack != null && GTUtility.areStacksEqual(entry.stack, stack, true)) {
-                entry.amount = safeAddLong(entry.amount, amount);
-                return;
-            }
-        }
-        buffer.add(new BufferedItemStack(stack, amount));
-    }
-
-    private static void addFluidToBuffer(List<BufferedFluidStack> buffer, FluidStack stack, long amount) {
-        if (stack == null || amount <= 0L) {
-            return;
-        }
-        for (BufferedFluidStack entry : buffer) {
-            if (entry != null && entry.fluidStack != null && entry.fluidStack.isFluidEqual(stack)) {
-                entry.amount = safeAddLong(entry.amount, amount);
-                return;
-            }
-        }
-        buffer.add(new BufferedFluidStack(stack, amount));
-    }
-
-    static long countItemInBuffer(List<BufferedItemStack> buffer, ItemStack template) {
-        long total = 0L;
-        for (BufferedItemStack entry : buffer) {
-            if (entry != null && entry.stack != null && GTUtility.areStacksEqual(entry.stack, template, true)) {
-                total = safeAddLong(total, entry.amount);
-            }
-        }
-        return total;
-    }
-
-    static long countFluidInBuffer(List<BufferedFluidStack> buffer, FluidStack template) {
-        if (template == null) {
-            return 0L;
-        }
-        long total = 0L;
-        for (BufferedFluidStack entry : buffer) {
-            if (entry != null && entry.fluidStack != null && entry.fluidStack.isFluidEqual(template)) {
-                total = safeAddLong(total, entry.amount);
-            }
-        }
-        return total;
-    }
+    // ---- string keys (used for oreDict/itemMatch caches) ----
 
     static String itemBufferKey(ItemStack stack) {
         if (stack == null || stack.getItem() == null) {
@@ -355,28 +302,6 @@ public final class RuntimeResourceSnapshot {
         }
         String itemName = net.minecraft.item.Item.itemRegistry.getNameForObject(stack.getItem());
         return "item:" + itemName + ":" + stack.getItemDamage();
-    }
-
-    // ---- arithmetic ----
-
-    private static long safeAddLong(long left, long right) {
-        if (right > 0L && left > Long.MAX_VALUE - right) {
-            return Long.MAX_VALUE;
-        }
-        if (right < 0L && left < Long.MIN_VALUE - right) {
-            return Long.MIN_VALUE;
-        }
-        return left + right;
-    }
-
-    private static long safeMultiply(long left, long right) {
-        if (left <= 0L || right <= 0L) {
-            return 0L;
-        }
-        if (left > Long.MAX_VALUE / right) {
-            return Long.MAX_VALUE;
-        }
-        return left * right;
     }
 
     public interface Context {
